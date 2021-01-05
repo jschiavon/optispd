@@ -1,10 +1,6 @@
 import jax.numpy as jnp
 from jax import jit, random, partial, vmap
-
-@partial(jit, static_argnums=(2,3))
-def wishart(key, V, p, n):
-    G = random.multivariate_normal(key, mean=jnp.zeros(shape=(p)), cov=V, shape=(n,))
-    return jnp.matmul(G, jnp.swapaxes(G, -2, -1))
+from jax.ops import index, index_update
 
 @jit
 def _logm(X):
@@ -29,26 +25,6 @@ def _inner(X, U, W):
     return jnp.trace(jnp.matmul(jnp.linalg.solve(X, U), 
                              jnp.linalg.solve(X, W)))
 
-@partial(jit, static_argnums=(1))
-def _rand(key, p):
-    A = random.normal(key, shape=(p, p))
-    return jnp.dot(A, A.T)
-
-@partial(jit, static_argnums=(1))
-def _rand_mineig(key, p, min_eig, c):
-    key = random.split(key, 2)
-    l = random.exponential(key[0], shape=(p,))
-    l = l * c * min_eig / jnp.max(l) + min_eig
-    A = random.normal(key[1], shape=(p, p))
-    l = jnp.expand_dims(l, 0)
-    A = jnp.linalg.qr(A)[0]
-    return jnp.dot(A, l * A.T)
-    
-@partial(jit, static_argnums=(2))
-def _randvec(key, x, p, sc, loc):
-    A = random.normal(key, shape=(p, p)) * sc + loc
-    return _proj(x, A)
-
 @jit
 def _norm(X, W):
     iC = jnp.linalg.inv(jnp.linalg.cholesky(X))
@@ -62,12 +38,12 @@ def _dist(X, Y):
     return jnp.linalg.norm(_logm(mid))
 
 @jit
-def _proj(X, Y):
+def _proj(Y):
     return (Y + jnp.swapaxes(Y, -2, -1)) / 2
 
 @jit
 def _egrad2rgrad(X, G):
-    return jnp.matmul(X, jnp.matmul(_proj(X, G), X))
+    return jnp.matmul(X, jnp.matmul(_proj(G), X))
 
 @jit
 def _exp(X, U):
@@ -76,7 +52,7 @@ def _exp(X, U):
 @jit
 def _log(X, Y):
     C = jnp.linalg.cholesky(X)
-    iC = jnp.linalg.inv(c)
+    iC = jnp.linalg.inv(C)
     mid = jnp.matmul(jnp.matmul(iC, Y), jnp.swapaxes(iC, -2, -1))
     return jnp.matmul(jnp.matmul(C, _logm(mid)), jnp.swapaxes(C, -2, -1))
 
@@ -106,14 +82,19 @@ class SPD():
     """
     Manifold of (p x p) symmetric positive definite matrix.
     """    
-    def __init__(self, p, approx=True):
+    def __init__(self, p, m = 1, approx=True):
         """
         Manifold of (p x p) symmetric positive definite matrix.
         """
         assert isinstance(p, (int, jnp.integer)), "p must be an integer"
+        assert isinstance(m, (int, jnp.integer)), "m must be an integer"
         self._p = p
-        name = ("Manifold of ({0} x {0}) positive definite matrices").format(p)
-        self._dimension = jnp.int_(p * (p + 1) / 2)
+        self._m = m
+        if m == 1:
+            name = ("Manifold of ({0} x {0}) positive definite matrices").format(p)
+        else:
+            name = ("Product manifold of {1} ({0} x {0}) positive definite matrices").format(p, m)
+        self._dimension = m * jnp.int_(p * (p + 1) / 2)
         self._name = name
         self._approximated = approx
     
@@ -127,68 +108,107 @@ class SPD():
         return self._dimension
 
 
+    @partial(jit, static_argnums=(0))
     def inner(self, X, U, W):
         """Returns the inner product (i.e., the Riemannian metric) between two
         tangent vectors `U` and `W` in the tangent space at `X`.
         """
-        return _inner(X, U, W)
+        if self._m == 1:
+            return _inner(X, U, W)
+        else:
+            return jnp.sum(vmap(_inner)(X, U, W))
 
 
+    @partial(jit, static_argnums=(0))
     def norm(self, X, W):
         """Computes the norm of a tangent vector `W` in the tangent space at `X`.
         """
-        return _norm(X, W)
+        if self._m == 1:
+            return _norm(X, W)
+        else:
+            norms = vmap(_norm)(X, W)
+            return jnp.sqrt(jnp.sum(norms * norms))
 
     
-    def rand(self, key, min_eig=None, c=1000.):
+    @partial(jit, static_argnums=(0))
+    def rand(self, key):
         """Returns a random point on the manifold.
         """
-        if min_eig is None:
-            return _rand(key, self._p)
+        if self._m == 1:
+            A = random.normal(key, shape=(self._p, self._p))
+            return jnp.matmul(A, jnp.swapaxes(A, -2, -1))
         else:
-            return _rand_mineig(key, self._p, min_eig, c)
+            A = random.normal(key, shape=(self._m, self._p, self._p))
+            return vmap(jnp.matmul)(A, jnp.swapaxes(A, -2, -1))
+        
 
-
-    def randvec(self, key, x, sc = 1., loc = 0.):
+    @partial(jit, static_argnums=(0))
+    def randvec(self, key, X):
         """Returns a random vector on the tangent space of the manifold at `X`.
         """
-        return _randvec(key, x, self._p, sc, loc)
+        if self._m == 1:
+            A = random.normal(key, shape=(self._p, self._p))
+        else:
+            A = random.normal(key, shape=(self._m, self._p, self._p))
+        return self.proj(X, A)
+        
 
-
+    @partial(jit, static_argnums=(0))
     def dist(self, X, Y):
         """Returns the geodesic distance between two points `X` and `Y` on the
         manifold.
         """
-        return _dist(X, Y)
+        if self._m == 1:
+            return _dist(X, Y)
+        else:
+            d = vmap(_dist)(X, Y)
+            return jnp.sqrt(jnp.sum(d * d))
         
 
+    @partial(jit, static_argnums=(0))
     def proj(self, X, Y):
         """Returns the projection of an element `Y` to the tangent space in `X`"""
-        return _proj(X, Y)
+        if self._m == 1:
+            return _proj(Y)
+        else:
+            return vmap(_proj)(Y)
+        
 
-
+    @partial(jit, static_argnums=(0))
     def egrad2rgrad(self, X, G):
         """Maps the Euclidean gradient `G` in the ambient space on the tangent
         space of the manifold at `X`. For embedded submanifolds, this is simply
         the projection of `G` on the tangent space at `X`.
         """
-        return _egrad2rgrad(X, G)
+        if self._m == 1:
+            return _egrad2rgrad(X, G)
+        else:
+            return vmap(_egrad2rgrad)(X, G)
 
     
+    @partial(jit, static_argnums=(0))
     def exp(self, X, U):
         """Computes the Lie-theoretic exponential map of a tangent vector `U`
         at `X`.
         """
-        return _exp(X, U)
+        if self._m == 1:
+            return _exp(X, U)
+        else:
+            return vmap(_exp)(X, U)
     
     
+    @partial(jit, static_argnums=(0))
     def secondorderexp(self, X, U):
         """Computes the second order approximation of the Lie-theoretic 
         exponential map of a tangent vector `U` at `X`.
         """
-        return _secondorderexp(X, U)
+        if self._m == 1:
+            return _secondorderexp(X, U)
+        else:
+            return vmap(_secondorderexp)(X, U)
+        
 
-
+    @partial(jit, static_argnums=(0))
     def retraction(self, X, U):
         """Computes a retraction mapping a vector `U` in the tangent space at
         `X` to the manifold.
@@ -199,21 +219,258 @@ class SPD():
             return self.exp(X, U)
 
 
+    @partial(jit, static_argnums=(0))
     def log(self, X, Y):
         """Computes the Lie-theoretic logarithm of `Y`. This is the inverse of
         `exp`.
         """
-        return _log(X, Y)
-        
+        if self._m == 1:
+            return _log(X, Y)
+        else:
+            return vmap(_log)(X, Y)
     
+    
+    @partial(jit, static_argnums=(0))
     def parallel_transport(self, X, Y, U):
         """Computes a vector transport which transports a vector `U` in the
         tangent space at `X` to the tangent space at `Y`.
         """
-        return _transp(X, Y, U)
+        if self._m == 1:
+            return _transp(X, Y, U)
+        else:
+            return vmap(_transp)(X, Y, U)
+    
 
+    @partial(jit, static_argnums=(0))
     def vector_transport(self, X, U, W):
         """Computes a vector transport which transports the vector `U` in the
         tangent space at `X` over the direction `W` in the tangent space at `X`.
         """
-        return _vtransp(X, U, W)
+        if self._m == 1:
+            return _vtransp(X, U, W)
+        else:
+            return vmap(_vtransp)(X, U, W)
+    
+
+
+class Euclidean():
+    """
+    R^n euclidean manifold of dimension n
+    """    
+    def __init__(self, n, approx=True):
+        """
+        R^n euclidean manifold of dimension n
+        """
+        assert isinstance(n, (int, jnp.integer)), "n must be an integer"
+        self._n = n
+        name = ("R^{}").format(n)
+        self._dimension = jnp.int_(n * (n + 1) / 2)
+        self._name = name
+        self._approximated = approx
+    
+    def __str__(self):
+        """Returns a string representation of the particular manifold."""
+        return self._name
+
+    @property
+    def dim(self):
+        """The dimension of the manifold"""
+        return self._dimension
+
+    
+    @partial(jit, static_argnums=(0))
+    def inner(self, X, U, W):
+        """Returns the inner product (i.e., the Riemannian metric) between two
+        tangent vectors `U` and `W` in the tangent space at `X`.
+        """
+        return jnp.dot(U,W)
+
+    
+    @partial(jit, static_argnums=(0))
+    def norm(self, X, W):
+        """Computes the norm of a tangent vector `W` in the tangent space at `X`.
+        """
+        return jnp.linalg.norm(W)
+
+    
+    @partial(jit, static_argnums=(0))
+    def rand(self, key):
+        """Returns a random point on the manifold.
+        """
+        return random.normal(key, shape=(self._n,))
+
+
+    @partial(jit, static_argnums=(0))
+    def randvec(self, key, X, sc = 1., loc = 0.):
+        """Returns a random vector on the tangent space of the manifold at `X`.
+        """
+        Y = random.normal(key, shape=(self._n,))
+        return Y / self.norm(X, Y)
+
+
+    @partial(jit, static_argnums=(0))
+    def dist(self, X, Y):
+        """Returns the geodesic distance between two points `X` and `Y` on the
+        manifold.
+        """
+        return jnp.linalg.norm(X - Y)
+        
+
+    @partial(jit, static_argnums=(0))
+    def proj(self, X, Y):
+        """Returns the projection of an element `Y` to the tangent space in `X`"""
+        return Y
+
+
+    @partial(jit, static_argnums=(0))
+    def egrad2rgrad(self, X, G):
+        """Maps the Euclidean gradient `G` in the ambient space on the tangent
+        space of the manifold at `X`. For embedded submanifolds, this is simply
+        the projection of `G` on the tangent space at `X`.
+        """
+        return G
+
+    
+    @partial(jit, static_argnums=(0))
+    def exp(self, X, U):
+        """Computes the Lie-theoretic exponential map of a tangent vector `U`
+        at `X`.
+        """
+        return X + U
+    
+
+    @partial(jit, static_argnums=(0))
+    def retraction(self, X, U):
+        """Computes a retraction mapping a vector `U` in the tangent space at
+        `X` to the manifold.
+        """
+        return self.exp(X, U)
+
+
+    @partial(jit, static_argnums=(0))
+    def log(self, X, Y):
+        """Computes the Lie-theoretic logarithm of `Y`. This is the inverse of
+        `exp`.
+        """
+        return Y - X
+        
+    
+    @partial(jit, static_argnums=(0))
+    def parallel_transport(self, X, Y, U):
+        """Computes a vector transport which transports a vector `U` in the
+        tangent space at `X` to the tangent space at `Y`.
+        """
+        return U
+
+    @partial(jit, static_argnums=(0))
+    def vector_transport(self, X, U, V):
+        """Computes a vector transport which transports the vector `U` in the
+        tangent space at `X` over the direction `W` in the tangent space at `X`.
+        """
+        return U
+
+
+
+class Product():
+    "Product manifold"
+    def __init__(self, manifolds):
+        "Instantiate a product manifold from an iterable of manifolds objects"
+        self._manifolds = tuple(manifolds)
+        self._len_man = len(self._manifolds)
+        self._name = "Product manifold: {:s}".format(" x ".join([str(man) for man in manifolds]))
+        self._dimension = jnp.sum(jnp.array([man.dim for man in manifolds]))
+
+    def __str__(self):
+        """Returns a string representation of the particular manifold."""
+        return self._name
+
+    @property
+    def dim(self):
+        """The dimension of the manifold"""
+        return self._dimension
+
+    #@partial(jit, static_argnums=(0))
+    def inner(self, X, G, H):
+        arr = jnp.zeros(self._len_man)
+        for k, man in enumerate(self._manifolds):
+            arr = index_update(arr, k, man.inner(X[k], G[k], H[k]))
+        return jnp.sum(arr)
+    
+
+    #@partial(jit, static_argnums=(0))
+    def norm(self, X, G):
+        arr = jnp.zeros(self._len_man)
+        for k, man in enumerate(self._manifolds):
+            arr = index_update(arr, k, man.norm(X[k], G[k]))
+        return jnp.sum(arr)
+        
+    
+    #@partial(jit, static_argnums=(0))
+    def dist(self, X, Y):
+        arr = jnp.zeros(self._len_man)
+        for k, man in enumerate(self._manifolds):
+            arr = index_update(arr, k, man.dist(X[k], Y[k]))
+        return jnp.sqrt(jnp.sum(arr * arr))
+        
+
+    def proj(self, X, U):
+        return _ProductTangentVector([man.proj(X[k], U[k]) for k, man in enumerate(self._manifolds)])
+    
+
+    def egrad2rgrad(self, X, G):
+        return _ProductTangentVector([man.egrad2rgrad(X[k], G[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def exp(self, X, U):
+        return tuple([man.exp(X[k], U[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def retraction(self, X, U):
+        return tuple([man.retraction(X[k], U[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def log(self, X, U):
+        return _ProductTangentVector([man.log(X[k], U[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def rand(self, key):
+        key = random.split(key, self._len_man)
+        return tuple([man.rand(key[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def randvec(self, key, X):
+        key = random.split(key, self._len_man)
+        return _ProductTangentVector([man.rand(key[k], X[k]) for k, man in enumerate(self._manifolds)])
+
+
+    def parallel_transport(self, X, Y, U):
+        return _ProductTangentVector([man.parallel_transport(X[k], Y[k], U[k]) for k, man in enumerate(self._manifolds)])
+
+    
+    def vector_transport(self, X, U, W):
+        return _ProductTangentVector([man.parallel_transport(X[k], U[k], W[k]) for k, man in enumerate(self._manifolds)])
+
+
+
+class _ProductTangentVector(list):
+    def __repr__(self):
+        return "_ProductTangentVector: " + super().__repr__()
+
+    def __add__(self, other):
+        assert len(self) == len(other)
+        return _ProductTangentVector([v + other[k] for k, v in enumerate(self)])
+
+    def __sub__(self, other):
+        assert len(self) == len(other)
+        return _ProductTangentVector([v - other[k] for k, v in enumerate(self)])
+
+    def __mul__(self, other):
+        return _ProductTangentVector([other * val for val in self])
+
+    __rmul__ = __mul__
+
+    def __div__(self, other):
+        return _ProductTangentVector([val / other for val in self])
+
+    def __neg__(self):
+        return _ProductTangentVector([-val for val in self])
