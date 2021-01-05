@@ -93,6 +93,10 @@ class OptimizerResult(NamedTuple):
     time: jnp.ndarray
 
     def __str__(self):
+        try:
+            sz = self.x.size
+        except AttributeError:
+            sz = sum(x.size for x in self.x)
         return ("{}.\n---\nSuccess: {} with status {} in {:.3f} s.\n"
         "[{}]\n"
         " -Iteration {} (cost evaluation: {}, gradient evaluation: {}, time/it: {})\n"
@@ -101,7 +105,7 @@ class OptimizerResult(NamedTuple):
             self.success, self.status, self.time, self.message,
             self.nit, self.nfev, self.ngev, self.time / self.nit,
             self.fun, self.grnorm, self.stepsize,
-            self.x if self.x.size < 50 else '\t... Too big to show...'
+            self.x if sz < 50 else '\t... Too big to show...'
         )
 
 
@@ -320,8 +324,6 @@ class RSD():
         while True:
             if self._parms.verbosity >= 2:
                 print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
-            
-            if self._parms.verbosity >= 2:
                 print('\tgrad norm: {:.2f}'.format(grnorm))
             
             status = self._check_stopping_criterion(t_start, k, grnorm, stepsize, self._costev)
