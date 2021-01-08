@@ -42,8 +42,8 @@ dependencies:
   - glib=2.66.1=h92f7085_0
   - gmp=6.1.2=h6c8ec71_1
   - gmpy2=2.0.8=py37h10f8cd9_2
-  - gst-plugins-base=1.14.0=hbbd80ab_1
-  - gstreamer=1.14.0=hb31296c_0
+  - gst-plugins-base=1.14.0=h8213a91_2
+  - gstreamer=1.14.0=h28cd5cc_2
   - gxx_impl_linux-64=7.5.0=hdf63c60_6
   - gxx_linux-64=7.5.0=h09487f9_20
   - hdf4=4.2.13=h3ca952b_2
@@ -56,9 +56,9 @@ dependencies:
   - intel-openmp=2021.1.1=intel_189
   - intelpython=2021.1.1=1
   - ipykernel=5.3.4=py37h5ca1d4c_0
-  - ipython=7.19.0=py37hb070fc8_0
+  - ipython=7.18.1=py37h5ca1d4c_0
   - ipython_genutils=0.2.0=pyhd3eb1b0_1
-  - ipywidgets=7.5.1=py_1
+  - ipywidgets=7.6.1=pyhd3eb1b0_0
   - isort=5.6.4=py_0
   - jedi=0.17.2=py37h06a4308_1
   - jinja2=2.11.2=py_0
@@ -70,6 +70,7 @@ dependencies:
   - jupyter_console=6.2.0=py_0
   - jupyter_core=4.7.0=py37h06a4308_0
   - jupyterlab_pygments=0.1.2=py_0
+  - jupyterlab_widgets=1.0.0=pyhd3eb1b0_1
   - kiwisolver=1.2.0=py37h2bdabe4_1
   - krb5=1.18.2=h173b8e3_0
   - lazy-object-proxy=1.4.3=py37h27cfd23_2
@@ -115,13 +116,13 @@ dependencies:
   - ncurses=6.2=he6710b0_1
   - nest-asyncio=1.4.3=pyhd3eb1b0_0
   - netcdf4=1.5.3=py37hbf33ddf_0
-  - notebook=6.1.5=py37h06a4308_0
+  - notebook=6.1.6=py37h06a4308_0
   - numba=0.51.2=np119py37h9b0d472_10
   - numpy=1.19.2=py37h02626c5_0
   - numpy-base=1.19.2=py37h591eb60_0
   - olefile=0.46=py37_0
   - opencl_rt=2021.1.1=intel_189
-  - openssl=1.1.1h=h14c3975_0
+  - openssl=1.1.1g=hb8a9d29_2
   - packaging=20.8=pyhd3eb1b0_0
   - pandas=1.1.2=py37hd564b9c_0
   - pandoc=2.11=hb0f4dca_0
@@ -131,12 +132,12 @@ dependencies:
   - pcre=8.44=he6710b0_0
   - pexpect=4.8.0=pyhd3eb1b0_3
   - pickleshare=0.7.5=pyhd3eb1b0_1003
-  - pillow=8.0.1=py37he98fc37_0
+  - pillow=8.1.0=py37he98fc37_0
   - pip=20.2.3=py37h56aae7b_1
   - prometheus_client=0.9.0=pyhd3eb1b0_0
   - prompt-toolkit=3.0.8=py_0
   - prompt_toolkit=3.0.8=0
-  - ptyprocess=0.6.0=pyhd3eb1b0_2
+  - ptyprocess=0.7.0=pyhd3eb1b0_2
   - pycparser=2.20=py37h310c2dd_2
   - pygments=2.7.3=pyhd3eb1b0_0
   - pylint=2.6.0=py37_0
@@ -144,7 +145,7 @@ dependencies:
   - pyqt=5.9.2=py37h05f1152_2
   - pyrsistent=0.17.3=py37h7b6447c_0
   - pystan=2.19.1.1=py37hb3f55d8_1
-  - python=3.7.9=h7af079d_1
+  - python=3.7.7=h7f0eb4e_22
   - python-dateutil=2.8.1=py37hd8ca5e9_2
   - pytz=2020.1=py37h0699639_1
   - pyyaml=5.3.1=py37h1acd8f6_0
@@ -166,7 +167,7 @@ dependencies:
   - tbb=2021.1.1=intel_119
   - tbb4py=2021.1.1=py37_intel_119
   - tcl=8.6.9=h14c3975_27
-  - terminado=0.9.1=py37_0
+  - terminado=0.9.2=py37h06a4308_0
   - testpath=0.4.4=py_0
   - threadpoolctl=2.1.0=py37h6447541_2
   - tk=8.6.9=29

@@ -3,6 +3,10 @@ from jax import jit, random, partial, vmap
 from jax.ops import index, index_update
 
 @jit
+def sandwitch(X, Y):
+    return jnp.matmul(X, jnp.matmul(Y, jnp.swapaxes(X, -2, -1)))
+
+@jit
 def _logm(X):
     w, v = jnp.linalg.eigh(X)
     w = jnp.diag(jnp.log(w))
@@ -57,25 +61,45 @@ def _log(X, Y):
     return jnp.matmul(jnp.matmul(C, _logm(mid)), jnp.swapaxes(C, -2, -1))
 
 @jit
-def _secondorderexp(X, U):
+def _secondorder_exp(X, U):
     return X + U + jnp.matmul(U, jnp.linalg.solve(X, U)) / 2
 
 @jit
 def _transp(X, Y, U):
-    Xhalf = _sqrtm(X)
-    iXhalf = jnp.linalg.inv(Xhalf)
-    E = _sqrtm(jnp.matmul(iXhalf, jnp.matmul(Y, iXhalf)))
-    E = jnp.matmul(Xhalf, jnp.matmul(E, iXhalf))
+    E = _sqrtm(jnp.matmul(Y, jnp.linalg.inv(X)))
     return jnp.matmul(E, jnp.matmul(U, jnp.swapaxes(E, -2, -1)))
+    # Xhalf = _sqrtm(X)
+    # iXhalf = jnp.linalg.inv(Xhalf)
+    # E = _sqrtm(jnp.matmul(iXhalf, jnp.matmul(Y, iXhalf)))
+    # E = jnp.matmul(Xhalf, jnp.matmul(E, iXhalf))
+    # return jnp.matmul(E, jnp.matmul(U, jnp.swapaxes(E, -2, -1)))
 
 @jit
 def _vtransp(X, U, W):
+    # iX = jnp.linalg.inv(X)
+    # E = _exp(X, W)
+    # mid = jnp.matmul(iX, jnp.matmul(U, iX))
+    # return sandwitch(E, mid)
     Xhalf = _sqrtm(X)
     iXhalf = jnp.linalg.inv(Xhalf)
     E = jnp.matmul(iXhalf, jnp.matmul(W, iXhalf))
     E = jnp.matmul(_expm(E / 2), Xhalf)
     E1 = jnp.matmul(iXhalf, jnp.matmul(U, iXhalf))
     return jnp.matmul(jnp.swapaxes(E, -2, -1), jnp.matmul(E1, E))
+
+
+@jit
+def _secondorder_vtransp(X, U, W):
+    iX = jnp.linalg.inv(X)
+    A = 0.5 * jnp.matmul(iX, W)
+    AA = 0.5 * jnp.matmul(A, A)
+    
+    UA = jnp.matmul(U, A)
+    AUA = jnp.matmul(jnp.swapaxes(A, -2, -1), UA)
+    UAA = jnp.matmul(U, AA)
+    
+    return U + UA + jnp.swapaxes(UA, -2, -1) + AUA + UAA + jnp.swapaxes(UAA, -2, -1)
+
 
 
 class SPD():
@@ -198,14 +222,14 @@ class SPD():
     
     
     @partial(jit, static_argnums=(0))
-    def secondorderexp(self, X, U):
+    def secondorder_exp(self, X, U):
         """Computes the second order approximation of the Lie-theoretic 
         exponential map of a tangent vector `U` at `X`.
         """
         if self._m == 1:
-            return _secondorderexp(X, U)
+            return _secondorder_exp(X, U)
         else:
-            return vmap(_secondorderexp)(X, U)
+            return vmap(_secondorder_exp)(X, U)
         
 
     @partial(jit, static_argnums=(0))
@@ -214,7 +238,7 @@ class SPD():
         `X` to the manifold.
         """
         if self._approximated:
-            return self.secondorderexp(X, U)
+            return self.secondorder_exp(X, U)
         else:
             return self.exp(X, U)
 
@@ -242,7 +266,7 @@ class SPD():
     
 
     @partial(jit, static_argnums=(0))
-    def vector_transport(self, X, U, W):
+    def vtransport(self, X, U, W):
         """Computes a vector transport which transports the vector `U` in the
         tangent space at `X` over the direction `W` in the tangent space at `X`.
         """
@@ -251,6 +275,28 @@ class SPD():
         else:
             return vmap(_vtransp)(X, U, W)
     
+
+    @partial(jit, static_argnums=(0))
+    def secondorder_vtransport(self, X, U, W):
+        """Computes a vector transport which transports the vector `U` in the
+        tangent space at `X` over the direction `W` in the tangent space at `X`.
+        """
+        if self._m == 1:
+            return _secondorder_vtransp(X, U, W)
+        else:
+            return vmap(_secondorder_vtransp)(X, U, W)
+    
+    
+    @partial(jit, static_argnums=(0))
+    def vector_transport(self, X, U, W):
+        """Computes a vector transport which transports the vector `U` in the
+        tangent space at `X` over the direction `W` in the tangent space at `X`.
+        """
+        if self._approximated:
+            return self.secondorder_vtransport(X, U, W)
+        else:
+            return self.vtransport(X, U, W)
+        
 
 
 class Euclidean():

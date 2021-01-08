@@ -2,7 +2,6 @@ import time
 import jax.numpy as jnp
 from typing import NamedTuple, Union
 
-
 class OptimizerParams(NamedTuple):
     """
     Parameters for the optimizer:
@@ -16,7 +15,7 @@ class OptimizerParams(NamedTuple):
             minimum length of the stepsize
         - maxcostevals (int, default 5000)
             maximum number of cost evaluations
-        - betamethod (str, default hagerzhang)
+        - betamethod (str, default hestenesstiefel)
             Method for beta computation
         - verbosity (int, default 0)
             Level of information logged by the solver while it operates,
@@ -30,7 +29,7 @@ class OptimizerParams(NamedTuple):
     mingradnorm: Union[float, jnp.ndarray] = 1e-6
     minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
-    betamethod: str = "fletcherreeves"
+    betamethod: str = "hestenesstiefel"
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
 
@@ -96,6 +95,10 @@ class OptimizerResult(NamedTuple):
     time: jnp.ndarray
 
     def __str__(self):
+        try:
+            sz = self.x.size
+        except AttributeError:
+            sz = sum(x.size for x in self.x)
         return ("{}.\n---\nSuccess: {} with status {} in {:.3f} s.\n"
         "[{}]\n"
         " -Iteration {} (cost evaluation: {}, gradient evaluation: {}, time/it: {})\n"
@@ -104,7 +107,7 @@ class OptimizerResult(NamedTuple):
             self.success, self.status, self.time, self.message,
             self.nit, self.nfev, self.ngev, self.time / self.nit,
             self.fun, self.grnorm, self.stepsize,
-            self.x if self.x.size < 50 else '\t... Too big to show...'
+            self.x if sz < 50 else '\t... Too big to show...'
         )
 
 
@@ -125,6 +128,7 @@ class OptimizerLog(NamedTuple):
         fun: sequence of function value.
         gr: final gradient array.
         grnorm: sequence of gradient norm.
+        beta: sequence of computed beta.
         fev: sequence of function evaluations.
         gev: sequence of gradient evaluations.
         it: iterations.
@@ -133,8 +137,10 @@ class OptimizerLog(NamedTuple):
     """
     name: str = ''
     fun: jnp.ndarray = jnp.array([])
-    x: jnp.ndarray = jnp.array([])
+    # x: jnp.ndarray = jnp.array([])
+    x: list = []
     grnorm: jnp.ndarray = jnp.array([])
+    beta: jnp.ndarray = jnp.array([])
     fev: jnp.ndarray = jnp.array([], dtype=int)
     gev: jnp.ndarray = jnp.array([], dtype=int)
     it: jnp.ndarray = jnp.array([], dtype=int)
@@ -148,48 +154,50 @@ def _precon(x, g):
 
 def _betachoice(method, manifold):
     if method == 'hagerzhang':
-        def compute_beta(x, newx, gr, newgr, d):
-            oldgr = manifold.parallel_transport(x, newx, gr)
+        def compute_beta(x, newx, gr, newgr, d, newd):
+            oldgr = manifold.vector_transport(x, d, gr)
             diff = newgr - oldgr
-            deno = manifold.inner(newx, diff, d)
+            deno = manifold.inner(newx, diff, newd)
             numo = manifold.inner(newx, diff, newgr)
-            numo -= 2 * manifold.inner(newx, diff, diff) * manifold.inner(newx, d, newgr) / deno
+            numo -= 2 * manifold.inner(newx, diff, diff) * manifold.inner(newx, newd, newgr) / deno
             beta = numo / deno
-            dnorm = manifold.norm(newx, d)
+            dnorm = manifold.norm(newx, newd)
             grnorm = manifold.norm(x, gr)
             eta_HZ = -1 / (dnorm * min(0.01, grnorm))
             beta = max(beta, eta_HZ)
             return beta
     elif method == 'hybridhsdy':
-        def compute_beta(x, newx, gr, newgr, d):
-            oldgr = manifold.parallel_transport(x, newx, gr)
+        def compute_beta(x, newx, gr, newgr, d, newd):
+            oldgr = manifold.vector_transport(x, d, gr)
             diff = newgr - oldgr
-            deno = manifold.inner(newx, diff, d)
+            deno = manifold.inner(newx, diff, newd)
             numeHS = manifold.inner(newx, diff, newgr)
             numeDY = manifold.inner(newx, newgr, newgr)
             beta = max(0, min(numeHS, numeDY) / deno)
             return beta
     elif method == 'fletcherreeves':
-        def compute_beta(x, newx, gr, newgr, d):
+        def compute_beta(x, newx, gr, newgr, d, newd):
             return manifold.inner(newx, newgr, newgr) / manifold.inner(x, gr, gr)
     elif method == 'polakribiere':
-        def compute_beta(x, newx, gr, newgr, d):
-            oldgr = manifold.parallel_transport(x, newx, gr)
+        def compute_beta(x, newx, gr, newgr, d, newd):
+            oldgr = manifold.vector_transport(x, d, gr)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
             grinn = manifold.inner(x, gr, gr)
             return max(0, ip_diff / grinn)
     elif method == 'hestenesstiefel':
-        def compute_beta(x, newx, gr, newgr, d):
-            oldgr = manifold.parallel_transport(x, newx, gr)
+        def compute_beta(x, newx, gr, newgr, d, newd):
+            oldgr = manifold.vector_transport(x, d, gr)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
-            den_dif = manifold.inner(newx, diff, d)
+            den_dif = manifold.inner(newx, diff, newd)
             try:
                 beta = max(0, ip_diff / den_dif)
             except ZeroDivisionError:
                 beta = 1.
             return beta
+    else:
+        raise NotImplementedError
     return compute_beta
 
 
@@ -219,7 +227,7 @@ class RCG():
                 minimum length of the stepsize
             - maxcostevals (int, default 5000)
                 maximum number of cost evaluations
-            - betamethod (str, default FletcherReeves)
+            - betamethod (str, default HestenesStiefel)
                 Method for beta computation, check `BetaAvailable` attribute 
                 to see the implemented ones
             - verbosity (int, default 0)
@@ -254,7 +262,7 @@ class RCG():
             )
         self._ls_pars = LineSearchParameter(
             **tmp_ls_par
-        )
+            )
         if self._parms.betamethod.lower() in self.BetaAvailable:
             self.compute_beta = _betachoice(self._parms.betamethod.lower(), self.man)
         else:
@@ -267,19 +275,21 @@ class RCG():
         """Returns a string representation of the optimizer."""
         return self.__name__
     
-    def _check_stopping_criterion(self, time0, iter=-1, gradnorm=float('inf'),
+    def _check_stopping_criterion(self, time0, iters=-1, gradnorm=float('inf'),
                                   stepsize=float('inf'), costevals=-1):
         status = - 1
         if gradnorm <= self._parms.mingradnorm:
             status = 0
         elif stepsize <= self._parms.minstepsize:
             status = 1
-        elif time.time() >= time0 + self._parms.maxtime:
+        elif iters >= self._parms.maxiter:
             status = 2
-        elif iter >= self._parms.maxiter:
+        elif time.time() >= time0 + self._parms.maxtime:
             status = 3
         elif costevals >= self._parms.maxcostevals:
             status = 4
+        elif jnp.isnan(gradnorm):
+            raise ValueError("A wild nan appeared, iteration {}".format(iters))
         return status
 
     def linesearch(self, cost, x, d, f0, df0, old_f0):
@@ -354,15 +364,12 @@ class RCG():
         
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
-
-        # ls = jit(lambda x, d, f0, df0, old_f0: linesearch(
-        #     self.man, cost, x, d, f0, df0, old_f0, **self._ls_pars._asdict()
-        #     ))
+        t_start = time.time()
+        
         ls = lambda x, d, f0, df0, old_f0: self.linesearch(
             cost, x, d, f0, df0, old_f0
             )
 
-        t_start = time.time()
         if x is None:
             try:
                 x = self.man.rand(key)
@@ -370,8 +377,7 @@ class RCG():
                 raise ValueError("Either provide an initial point for the algorithm"
                                 "or a valid random key to perform random initialization")
         
-        k = 0
-        stepsize = 1.
+        k = 0; stepsize = 1.
         f0 = cost(x); self._costev = 1
         gr = self.man.egrad2rgrad(x, gradient(x)); self._gradev = 1
         grnorm = self.man.norm(x, gr)
@@ -382,18 +388,24 @@ class RCG():
         if self._parms.logverbosity:
             logs = OptimizerLog(name = "log of {}".format(self.__name__),
                 fun = jnp.array([f0]),
-                x = jnp.array([x]),
+                # x = jnp.array([x]),
+                x = [x],
                 grnorm = jnp.array([grnorm]),
                 fev = jnp.array([self._costev], dtype=int),
                 gev = jnp.array([self._gradev], dtype=int),
                 it = jnp.array([k], dtype=int),
                 stepsize = jnp.array([1.]),
-                time = jnp.array([0.])
+                time = jnp.array([time.time() - t_start])
                 )
 
-
         while True:
-            status = self._check_stopping_criterion(t_start, k, grnorm, stepsize, self._costev)
+            try:
+                status = self._check_stopping_criterion(t_start, k, grnorm, stepsize, self._costev)
+            except ValueError as e:
+                status = -1
+                print(e)
+                break
+
             if status >= 0:
                 if self._parms.verbosity >= 1:
                     print('Optimization completed in {} s.\n\tStatus: {} -> {}'.format(time.time() - t_start, status, msg))
@@ -412,28 +424,31 @@ class RCG():
             ls_results = ls(x, d, f0, df0, old_f0)
             self._costev += ls_results.nfev
 
+            alpha = ls_results.alpha
             stepsize = ls_results.stepsize
             newx = ls_results.x
             newf = ls_results.fun
-            d = self.man.parallel_transport(x, newx, d)
+            newd = self.man.vector_transport(x, alpha * d, d)
 
             newgr = self.man.egrad2rgrad(newx, gradient(newx)); self._gradev += 1
             newgrnorm = self.man.norm(newx, newgr)
             
-            beta = self.compute_beta(x, newx, gr, newgr, d)
+            beta = self.compute_beta(x, newx, gr, newgr, alpha * d, newd)
+            d = - newgr + beta * newd
 
-            d = - newgr + beta * d
             old_f0 = f0
             x = newx
             f0 = newf
             gr = newgr
             grnorm = newgrnorm
+            
             k += 1
 
             if self._parms.logverbosity:
                 logs = logs._replace(
                     fun = jnp.append(logs.fun, f0),
-                    x = jnp.concatenate((logs.x, jnp.expand_dims(x, axis=0)), axis=0),
+                    # x = jnp.concatenate((logs.x, jnp.expand_dims(x, axis=0)), axis=0),
+                    x = logs.x + [x],
                     grnorm = jnp.append(logs.grnorm, grnorm),
                     fev = jnp.append(logs.fev, self._costev),
                     gev = jnp.append(logs.gev, self._gradev),
@@ -441,7 +456,6 @@ class RCG():
                     stepsize = jnp.append(logs.stepsize, stepsize),
                     time = jnp.append(logs.time, time.time() - t_start)
                 )
-            
             
         result = OptimizerResult(
             name = self.__name__,
@@ -464,4 +478,4 @@ class RCG():
         else:
             return result
 
-
+  

@@ -134,7 +134,8 @@ class OptimizerLog(NamedTuple):
     """
     name: str = ''
     fun: jnp.ndarray = jnp.array([])
-    x: jnp.ndarray = jnp.array([])
+    # x: jnp.ndarray = jnp.array([])
+    x: list = []
     grnorm: jnp.ndarray = jnp.array([])
     fev: jnp.ndarray = jnp.array([], dtype=int)
     gev: jnp.ndarray = jnp.array([], dtype=int)
@@ -202,16 +203,16 @@ class RSD():
     def __str__(self):
         return self.__name__
 
-    def _check_stopping_criterion(self, time0, iter=-1, grnorm=float('inf'),
+    def _check_stopping_criterion(self, time0, iters=-1, grnorm=float('inf'),
                                   stepsize=float('inf'), costevals=-1):
         status = - 1
         if grnorm <= self._parms.mingradnorm:
             status = 0
         elif stepsize <= self._parms.minstepsize:
             status = 1
-        elif time.time() >= time0 + self._parms.maxtime:
+        elif iters >= self._parms.maxiter:
             status = 2
-        elif iter >= self._parms.maxiter:
+        elif time.time() >= time0 + self._parms.maxtime:
             status = 3
         elif costevals >= self._parms.maxcostevals:
             status = 4
@@ -291,12 +292,12 @@ class RSD():
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
         
+        t_start = time.time()
         ls = lambda x, d, f0, df0, old_f0: self.linesearch(
             cost, x, d, f0, df0, old_f0
             )
 
         k = 0; stepsize = jnp.inf
-        t_start = time.time()
         if x is None:
             try:
                 x = self.man.rand(key)
@@ -305,22 +306,23 @@ class RSD():
                                 "or a valid random key to perform random initialization")
     
         self._costev = 0; self._gradev = 0
-        old_f0 = jnp.inf
+        old_f0 = 1.
         f0 = cost(x); self._costev += 1
         G = self.man.egrad2rgrad(x, gradient(x)); self._gradev += 1
         grnorm = self.man.norm(x, G)    
         if self._parms.logverbosity:
             logs = OptimizerLog(name = "log of {}".format(self.__name__),
                 fun = jnp.array([f0]),
-                x = jnp.array([x]),
+                # x = jnp.array([x]),
+                x = [x],
                 grnorm = jnp.array([grnorm]),
                 fev = jnp.array([self._costev], dtype=int),
                 gev = jnp.array([self._gradev], dtype=int),
                 it = jnp.array([k], dtype=int),
                 stepsize = jnp.array([1.]),
-                time = jnp.array([0.])
+                time = jnp.array([time.time() - t_start])
                 )
-
+            
         while True:
             if self._parms.verbosity >= 2:
                 print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
@@ -354,13 +356,14 @@ class RSD():
             if self._parms.logverbosity:
                 logs = logs._replace(
                     fun = jnp.append(logs.fun, f0),
-                    x = jnp.concatenate((logs.x, jnp.expand_dims(x, axis=0)), axis=0),
+                    #x = jnp.concatenate((logs.x, jnp.expand_dims(x, axis=0)), axis=0),
+                    x = logs.x + [x],
                     grnorm = jnp.append(logs.grnorm, grnorm),
                     fev = jnp.append(logs.fev, self._costev),
                     gev = jnp.append(logs.gev, self._gradev),
                     it = jnp.append(logs.it, k),
                     stepsize = jnp.append(logs.stepsize, stepsize),
-                    time = jnp.append(logs.time, time.time() - t_start)
+                    time = jnp.append(logs.time, time.time() - logs.time[-1])
                 )
             
             
