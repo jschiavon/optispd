@@ -57,7 +57,7 @@ class ComputeOnDemand():
 
 class SkewNormal():
     """
-    SkewNormal distribution with parameters lambda and Psi.
+    SkewNormal distribution with parameters csi, Psi and lambda.
 
     Methods implemented are:
         - sample
@@ -74,19 +74,16 @@ class SkewNormal():
     cov = ComputeOnDemand()
     alpha = ComputeOnDemand()
 
-    def __init__(self, lam, Psi):
-        """
-        Check dimensions compatibility and initialize the parameters.
-
-        Note that the internal parameters delta and Omega are lazily computed
-        if needed.
-        """
+    def __init__(self, csi, Psi, lam):
+        """Check dimensions compatibility and initialize the parameters."""
+        assert csi.shape[-1] == lam.shape[-1]
         assert lam.shape[-1] == Psi.shape[-1]
         assert Psi.shape[-1] == Psi.shape[-2]
 
+        self.csi = csi
         self.lam = lam
         self.Psi = Psi
-        self.k = lam.shape[-1]
+        self.k = csi.shape[-1]
 
     def sample(self, key, shape=(1,)):
         """
@@ -107,16 +104,23 @@ class SkewNormal():
         return Z
 
     def pdf(self, z):
-        #capital_phi = norm.cdf(jnp.matmul(self.alpha, z.T))
-        #small_phi = mvn.pdf(z, mean=jnp.zeros(self.k), cov=self.Omega)
+        """Compute the pdf of a skewnormal from sample z."""
         return jnp.exp(self.logpdf(z))
 
     def logpdf(self, z):
-        capital_phi = jnp.sum(norm.logcdf(jnp.matmul(self.alpha, z.T)))
+        """Compute the logpdf of a skewnormal from sample z."""
+        capital_phi = jnp.sum(
+            norm.logcdf(
+                jnp.matmul(
+                    self.alpha,
+                    (z - self.csi).T
+                    )
+                )
+            )
         small_phi = jnp.sum(
             mvn.logpdf(
                 z,
-                mean=jnp.zeros(self.k),
+                mean=self.csi,
                 cov=self.Omega)
             )
         return 2 + small_phi + capital_phi
@@ -134,10 +138,10 @@ if __name__ == '__main__':
     import seaborn as sns
     sns.set_style('darkgrid')
 
-    l = jnp.array([0.2, 2.4])
+    lam = jnp.array([0.2, 2.4])
     P = jnp.array([[1., 0.3], [0.3, 2.]])
 
-    sn = SkewNormal(l, P)
+    sn = SkewNormal(jnp.zeros((2)), P, lam)
 
     rng, key = random.split(rng)
     data = pd.DataFrame(
@@ -157,10 +161,12 @@ if __name__ == '__main__':
         columns=['x', 'y']
         )
 
-    sns.kdeplot(data=data_normal, x='x', y='y', alpha=0.4, color='k', linestyles='--')
+    sns.kdeplot(
+        data=data_normal, x='x', y='y',
+        alpha=0.4, color='k', linestyles='--'
+        )
     sns.scatterplot(data=data, x='x', y='y', alpha=0.6)
     sns.kdeplot(data=data, x='x', y='y')
-
     plt.show()
 
     print(sn.logpdf(data.to_numpy()))
