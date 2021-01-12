@@ -18,7 +18,7 @@ class OptimizerParams(NamedTuple):
             maximum number of cost evaluations
         - verbosity (int, default 0)
             Level of information logged by the solver while it operates,
-            0 is silent, 1 basic info on status, 2 info per iteration, 
+            0 is silent, 1 basic info on status, 2 info per iteration,
             3 info per linesearch iteration
         - logverbosity (bool, default False)
             Wether to produce a log of the optimization
@@ -62,7 +62,7 @@ class LineSearchParameter(NamedTuple):
 
 class OptimizerResult(NamedTuple):
     """Object holding optimization results.
-    
+
     Components:
         name: name of the optimizer
         success: True if optimization succeeded.
@@ -120,7 +120,7 @@ class LineSearchResult(NamedTuple):
 
 class OptimizerLog(NamedTuple):
     """Object holding optimization log.
-    
+
     Components:
         name: name of the optimizer
         fun: sequence of function value.
@@ -190,7 +190,7 @@ class RSD():
         """
         self.man = manifold
         self.__name__ = ("{} on the {}".format(self.AlgoName, str(self.man).lower()))
-        
+
         tmp_par = {k: pars[k] for k in pars if k in OptimizerParams._fields}
         tmp_ls_par = {k: pars[k] for k in pars if k in LineSearchParameter._fields}
         self._parms = OptimizerParams(
@@ -199,7 +199,7 @@ class RSD():
         self._ls_pars = LineSearchParameter(
             **tmp_ls_par
         )
-    
+
     def __str__(self):
         return self.__name__
 
@@ -222,37 +222,37 @@ class RSD():
         lscostev = 0
         dnorm = self.man.norm(x, d)
         alpha = jnp.where(
-            old_f0 == jnp.inf, 
+            old_f0 == jnp.inf,
             self._ls_pars.ls_initial_step / dnorm,
             2 * (f0 - old_f0) / df0 * self._ls_pars.ls_optimism
         )
         if self._ls_pars.ls_verbosity >= 1:
             print('\tstarting linesearch with alpha: {}'.format(alpha))
-            
+
         newx = self.man.retraction(x, alpha * d)
         newf = cost(newx); lscostev += 1
         k = 1
-        
-        while ((newf > f0 + self._ls_pars.ls_suff_decr * alpha * df0) and 
+
+        while ((newf > f0 + self._ls_pars.ls_suff_decr * alpha * df0) and
                (k <= self._ls_pars.ls_maxiter)):
             alpha = self._ls_pars.ls_contraction * alpha
-            
+
             if self._ls_pars.ls_verbosity >= 2:
                 print('\t\titer {}\n\t\tnew alpha: {}'.format(k, alpha))
-            
+
             newx = self.man.retraction(x, alpha * d)
             newf = cost(newx); lscostev += 1
-            
+
             if self._ls_pars.ls_verbosity >= 2:
                 print('\t\tnew function: {}'.format(newf))
-            
+
             k += 1
-        
+
         if newf > f0:
             alpha = 0
             newx = x
             newf = f0
-        
+
         stepsize = abs(alpha * dnorm)
 
         lsresult = LineSearchResult(
@@ -263,7 +263,7 @@ class RSD():
             fun = newf,
             stepsize = stepsize
         )
-        
+
         return lsresult
 
     def solve(self, cost, gradient, x=None, key=None):
@@ -291,7 +291,7 @@ class RSD():
                "-1=undefined")
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
-        
+
         t_start = time.time()
         ls = lambda x, d, f0, df0, old_f0: self.linesearch(
             cost, x, d, f0, df0, old_f0
@@ -304,12 +304,12 @@ class RSD():
             except TypeError:
                 raise ValueError("Either provide an initial point for the algorithm"
                                 "or a valid random key to perform random initialization")
-    
+
         self._costev = 0; self._gradev = 0
         old_f0 = 1.
         f0 = cost(x); self._costev += 1
         G = self.man.egrad2rgrad(x, gradient(x)); self._gradev += 1
-        grnorm = self.man.norm(x, G)    
+        grnorm = self.man.norm(x, G)
         if self._parms.logverbosity:
             logs = OptimizerLog(name = "log of {}".format(self.__name__),
                 fun = jnp.array([f0]),
@@ -322,23 +322,23 @@ class RSD():
                 stepsize = jnp.array([1.]),
                 time = jnp.array([time.time() - t_start])
                 )
-            
+
         while True:
             if self._parms.verbosity >= 2:
                 print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
-            
+
             status = self._check_stopping_criterion(t_start, k, grnorm, stepsize, self._costev)
             if status >= 0:
                 if self._parms.verbosity >= 1:
                     print('Optimization completed in {} s.\n\tStatus: {} -> {}'.format(time.time() - t_start, status, msg))
                 break
-            
+
             d = - G
             df0 = self.man.inner(x, d, G)
             if self._parms.verbosity >= 2:
                 print('\tdirectional derivative: {:.2f}'.format(df0))
-            
+
             ls_results = ls(x, d, f0, df0, old_f0)
             self._costev += ls_results.nfev
 
@@ -352,7 +352,7 @@ class RSD():
             G = self.man.egrad2rgrad(x, gradient(x)); self._gradev += 1
             grnorm = self.man.norm(x, G)
             k += 1
-            
+
             if self._parms.logverbosity:
                 logs = logs._replace(
                     fun = jnp.append(logs.fun, f0),
@@ -365,8 +365,8 @@ class RSD():
                     stepsize = jnp.append(logs.stepsize, stepsize),
                     time = jnp.append(logs.time, time.time() - logs.time[-1])
                 )
-            
-            
+
+
         result = OptimizerResult(
                 name=self.__name__,
                 success= True if status == 0 else False,
@@ -387,4 +387,3 @@ class RSD():
             return result, logs
         else:
             return result
-

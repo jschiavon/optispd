@@ -1,11 +1,12 @@
-import time
 import jax.numpy as jnp
 from typing import NamedTuple, Union
 
 
 class _LineSearchParameter(NamedTuple):
     """
-    Parameters:
+    Parameters for the linesearch algorithm.
+
+    Arguments:
         - ls_maxiter (int, default 10)
             maximum number of iterations
         - ls_minstepsize  (float, default 1e-16)
@@ -24,6 +25,7 @@ class _LineSearchParameter(NamedTuple):
             Level of information to be displayed:
             < 3 is silent, 3+ basic info
     """
+
     ls_maxiter: Union[int, jnp.ndarray] = 10
     ls_minstepsize: Union[float, jnp.ndarray] = 1e-16
     ls_optimism: Union[float, jnp.ndarray] = 1.2
@@ -48,6 +50,7 @@ class _LineSearchResult(NamedTuple):
         g_k: final gradient value
         status: integer end status
     """
+
     failed: Union[bool, jnp.ndarray]
     nit: Union[int, jnp.ndarray]
     nfev: Union[int, jnp.ndarray]
@@ -73,7 +76,7 @@ class _LineSearchState(NamedTuple):
     df_star: Union[float, jnp.ndarray]
     g_star: jnp.ndarray
     saddle_point: Union[bool, jnp.ndarray]
-    
+
 
 class _ZoomState(NamedTuple):
     done: Union[bool, jnp.ndarray]
@@ -105,31 +108,32 @@ def _binary_replace(replace_bit, original_dict, new_dict, keys=None):
 
 
 def _cubicmin(a, fa, fpa, b, fb, c, fc):
-  C = fpa
-  db = b - a
-  dc = c - a
-  denom = (db * dc) ** 2 * (db - dc)
-  d1 = jnp.array([[dc ** 2, -db ** 2],
-                  [-dc ** 3, db ** 3]])
-  A, B = jnp.dot(d1, jnp.array([fb - fa - C * db, fc - fa - C * dc])) / denom
+    C = fpa
+    db = b - a
+    dc = c - a
+    denom = (db * dc) ** 2 * (db - dc)
+    d1 = jnp.array([[dc ** 2, -db ** 2],
+                    [-dc ** 3, db ** 3]])
+    A, B = jnp.dot(d1, jnp.array([fb - fa - C * db, fc - fa - C * dc])) / denom
 
-  radical = B * B - 3. * A * C
-  xmin = a + (-B + jnp.sqrt(radical)) / (3. * A)
+    radical = B * B - 3. * A * C
+    xmin = a + (-B + jnp.sqrt(radical)) / (3. * A)
 
-  return xmin
+    return xmin
 
 
 def _quadmin(a, fa, fpa, b, fb):
-  D = fa
-  C = fpa
-  db = b - a
-  B = (fb - D - C * db) / (db ** 2)
-  xmin = a - C / (2. * B)
-  return xmin
+    D = fa
+    C = fpa
+    db = b - a
+    B = (fb - D - C * db) / (db ** 2)
+    xmin = a - C / (2. * B)
+    return xmin
 
 
-def _zoom(cost_and_grad, wolfe_one, wolfe_two, 
-            a_lo, f_lo, df_lo, a_hi, f_hi, df_hi, g0, pass_through):
+def _zoom(cost_and_grad, wolfe_one, wolfe_two,
+          a_lo, f_lo, df_lo, a_hi, f_hi, df_hi, g0,
+          pass_through):
     state = _ZoomState(
         done=False,
         failed=False,
@@ -151,9 +155,9 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         )
     delta1 = 0.2
     delta2 = 0.1
-    
-    #print(bool((~state.done) & (~pass_through) & (~state.failed)))
-    
+
+    # print(bool((~state.done) & (~pass_through) & (~state.failed)))
+
     while bool((~state.done) & (~pass_through) & (~state.failed)):
         a = jnp.minimum(state.a_hi, state.a_lo)
         b = jnp.maximum(state.a_hi, state.a_lo)
@@ -163,30 +167,33 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
 
         state = state._replace(
             failed=state.failed or dalpha <= 1e-10
-        )
+            )
 
-        # Cubmin is sometimes nan, though in this case the bounds check will fail.
-        a_j_cubic = _cubicmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi,
-                            state.f_hi, state.a_rec, state.f_rec)
-        use_cubic = (state.j > 0) & (a_j_cubic > a + cchk) & (a_j_cubic < b - cchk)
-        a_j_quad = _quadmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi, state.f_hi)
+        # Cubmin is sometimes nan,
+        # though in this case the bounds check will fail.
+        a_j_cu = _cubicmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi,
+                           state.f_hi, state.a_rec, state.f_rec)
+        use_cubic = (state.j > 0) & (a_j_cu > a + cchk) & (a_j_cu < b - cchk)
+        a_j_quad = _quadmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi,
+                            state.f_hi)
         use_quad = (~use_cubic) & (a_j_quad > a + qchk) & (a_j_quad < b - qchk)
         a_j_bisection = (state.a_lo + state.a_hi) / 2.
         use_bisection = (~use_cubic) & (~use_quad)
 
-        a_j = jnp.where(use_cubic, a_j_cubic, state.a_rec)
+        a_j = jnp.where(use_cubic, a_j_cu, state.a_rec)
         a_j = jnp.where(use_quad, a_j_quad, a_j)
         a_j = jnp.where(use_bisection, a_j_bisection, a_j)
-        
+
         f_j, df_j, g_j = cost_and_grad(a_j)
         state = state._replace(
             nfev=state.nfev + 1,
             ngev=state.ngev + 1
             )
-        
+
         hi_to_j = wolfe_one(a_j, f_j) | (f_j >= state.f_lo)
         star_to_j = wolfe_two(df_j) & (~hi_to_j)
-        hi_to_lo = (df_j * (state.a_hi - state.a_lo) >= 0.) & (~hi_to_j) & (~star_to_j)
+        hi_to_lo = (df_j * (state.a_hi - state.a_lo) >= 0.) & \
+            (~hi_to_j) & (~star_to_j)
         lo_to_j = (~hi_to_j) & (~star_to_j)
 
         state = state._replace(
@@ -202,7 +209,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                     )
                 )
             )
-        
+
         # Termination
         state = state._replace(
             done=star_to_j | state.done,
@@ -214,9 +221,9 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                     f_star=f_j,
                     df_star=df_j,
                     g_star=g_j,
-                )
-            ),
-        )
+                    )
+                ),
+            )
         state = state._replace(
             **_binary_replace(
                 hi_to_lo,
@@ -227,9 +234,9 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                     df_hi=df_lo,
                     a_rec=state.a_hi,
                     f_rec=state.f_hi,
+                    ),
                 ),
-            ),
-        )
+            )
         state = state._replace(
             **_binary_replace(
                 lo_to_j,
@@ -240,23 +247,23 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                     df_lo=df_j,
                     a_rec=state.a_lo,
                     f_rec=state.f_lo,
+                    ),
                 ),
-            ),
-        )
+            )
         state = state._replace(j=state.j + 1)
     return state
 
 
 def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
-    
+
     ls_pars = _LineSearchParameter(
         **pars
         )
-    
+
     # Wolfe conditions
     def wolfe_one(ai, fi):
         return fi > f0 + ls_pars.ls_suff_decr * ai * df0
-    
+
     def wolfe_two(dfi):
         return jnp.abs(dfi) <= ls_pars.ls_curvature * df0
 
@@ -274,24 +281,29 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
         df_star=df0,
         g_star=g0,
         saddle_point=False
-    )
+        )
 
     while ((~state.done) & (state.i <= ls_pars.ls_maxiter) & (~state.failed)):
         # no amax in this version, we just double as in scipy.
-        # unlike original algorithm we do our next choice at the start of this loop
-        ai = jnp.where(state.i == 1, ls_pars.ls_initial_step, state.ai * ls_pars.ls_optimism)
-        # if ai <= 0 then something went wrong. In practice any really small step
-        # length is a failure. Likely means the search pk is not good, perhaps we
+        # unlike original algorithm we do our choice at the start of this loop
+        ai = jnp.where(
+            state.i == 1,
+            ls_pars.ls_initial_step,
+            state.ai * ls_pars.ls_optimism
+            )
+        # if ai <= 0 then something went wrong. In practice any
+        # really small step length is a failure.
+        # Likely means the search pk is not good, perhaps we
         # are at a saddle point.
         saddle_point = ai < 1e-5
         state = state._replace(
-            failed = saddle_point, 
-            saddle_point = saddle_point
+            failed=saddle_point,
+            saddle_point=saddle_point
             )
 
         fi, gri, dfi = cost_and_grad(ai)
         state = state._replace(
-            nfev=state.nfev + 1, 
+            nfev=state.nfev + 1,
             ngev=state.ngev + 1
             )
 
@@ -299,21 +311,25 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
         star_i = wolfe_two(dfi) and (~star_zoom1)
         star_zoom2 = (dfi >= 0) and (~star_zoom1) and (~star_i)
 
-        zoom1 = _zoom(cost_and_grad, wolfe_one, wolfe_two, state.ai, state.fi, state.dfi, ai, fi, dfi, gri, ~star_zoom1)
+        zoom1 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
+                      state.ai, state.fi, state.dfi, ai, fi, dfi, gri,
+                      ~star_zoom1)
         state = state._replace(
-            nfev=state.nfev + zoom1.nfev, 
+            nfev=state.nfev + zoom1.nfev,
             ngev=state.ngev + zoom1.ngev
             )
 
-        zoom2 = _zoom(cost_and_grad, wolfe_one, wolfe_two, state.ai, state.fi, state.dfi, ai, fi, dfi, gri, ~star_zoom2)
+        zoom2 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
+                      state.ai, state.fi, state.dfi, ai, fi, dfi, gri,
+                      ~star_zoom2)
         state = state._replace(
-            nfev=state.nfev + zoom2.nfev, 
+            nfev=state.nfev + zoom2.nfev,
             ngev=state.ngev + zoom2.ngev
             )
-        
+
         state = state._replace(
-            done = star_zoom1 or state.done,
-            failed = (star_zoom1 & zoom1.failed) or state.failed,
+            done=(star_zoom1 or state.done),
+            failed=((star_zoom1 & zoom1.failed) or state.failed),
             **_binary_replace(
                 star_zoom1,
                 state._asdict(),
@@ -322,7 +338,7 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
                 )
             )
         state = state._replace(
-            done = star_i or state.done,
+            done=(star_i or state.done),
             **_binary_replace(
                 star_i,
                 state._asdict(),
@@ -335,8 +351,8 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
                 )
             )
         state = state._replace(
-            done = star_zoom2 or state.done,
-            failed = (star_zoom2 & zoom2.failed) or state.failed,
+            done=(star_zoom2 or state.done),
+            failed=((star_zoom2 & zoom2.failed) or state.failed),
             **_binary_replace(
                 star_zoom2,
                 state._asdict(),
@@ -349,7 +365,6 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
             ai=ai,
             fi=fi,
             dfi=dfi)
-    
 
     status = jnp.where(
         state.failed & (~state.saddle_point),
@@ -365,7 +380,7 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
             ),
         )
     result = _LineSearchResult(
-        failed=state.failed | (~state.done),
+        failed=(state.failed | (~state.done)),
         nit=state.i - 1,  # because iterations started at 1
         nfev=state.nfev,
         ngev=state.ngev,
@@ -376,9 +391,3 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
         status=status,
         )
     return result
-
-
-
-
-
-
