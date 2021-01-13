@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from typing import NamedTuple, Union
 
 
-class _LineSearchParameter(NamedTuple):
+class LineSearchParameter(NamedTuple):
     """
     Parameters for the linesearch algorithm.
 
@@ -29,7 +29,7 @@ class _LineSearchParameter(NamedTuple):
     ls_maxiter: Union[int, jnp.ndarray] = 10
     ls_minstepsize: Union[float, jnp.ndarray] = 1e-16
     ls_optimism: Union[float, jnp.ndarray] = 1.2
-    ls_initial_step: Union[float, jnp.ndarray] = 1
+    ls_initial_step: Union[float, jnp.ndarray] = 1.
     ls_suff_decr: Union[float, jnp.ndarray] = 1e-4
     ls_curvature: Union[float, jnp.ndarray] = 0.9
     ls_contraction: Union[float, jnp.ndarray] = 0.5
@@ -56,9 +56,9 @@ class _LineSearchResult(NamedTuple):
     nfev: Union[int, jnp.ndarray]
     ngev: Union[int, jnp.ndarray]
     k: Union[int, jnp.ndarray]
-    a_k: Union[int, jnp.ndarray]
-    f_k: jnp.ndarray
-    g_k: jnp.ndarray
+    a_k: Union[float, jnp.ndarray]
+    f_k: Union[float, jnp.ndarray]
+    g_k: Union[list, jnp.ndarray]
     status: Union[bool, jnp.ndarray]
 
 
@@ -74,7 +74,7 @@ class _LineSearchState(NamedTuple):
     a_star: Union[float, jnp.ndarray]
     f_star: Union[float, jnp.ndarray]
     df_star: Union[float, jnp.ndarray]
-    g_star: jnp.ndarray
+    g_star: Union[list, jnp.ndarray]
     saddle_point: Union[bool, jnp.ndarray]
 
 
@@ -93,7 +93,7 @@ class _ZoomState(NamedTuple):
     a_star: Union[float, jnp.ndarray]
     f_star: Union[float, jnp.ndarray]
     df_star: Union[float, jnp.ndarray]
-    g_star: Union[float, jnp.ndarray]
+    g_star: Union[list, jnp.ndarray]
     nfev: Union[int, jnp.ndarray]
     ngev: Union[int, jnp.ndarray]
 
@@ -132,8 +132,7 @@ def _quadmin(a, fa, fpa, b, fb):
 
 
 def _zoom(cost_and_grad, wolfe_one, wolfe_two,
-          a_lo, f_lo, df_lo, a_hi, f_hi, df_hi, g0,
-          pass_through):
+          a_lo, f_lo, df_lo, a_hi, f_hi, df_hi, g0, pars):
     state = _ZoomState(
         done=False,
         failed=False,
@@ -146,7 +145,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         df_hi=df_hi,
         a_rec=(a_lo + a_hi) / 2.,
         f_rec=(f_lo + f_hi) / 2.,
-        a_star=1.,
+        a_star=0.,
         f_star=f_lo,
         df_star=df_lo,
         g_star=g0,
@@ -156,9 +155,11 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
     delta1 = 0.2
     delta2 = 0.1
 
-    # print(bool((~state.done) & (~pass_through) & (~state.failed)))
+    if pars.ls_verbosity >= 3:
+        print('\t\tstarting zoom between {} and {}'.format(
+            state.a_lo, state.a_hi))
 
-    while bool((~state.done) & (~pass_through) & (~state.failed)):
+    while bool((~state.done) & (~state.failed)):
         a = jnp.minimum(state.a_hi, state.a_lo)
         b = jnp.maximum(state.a_hi, state.a_lo)
         dalpha = b - a
@@ -166,106 +167,104 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         qchk = delta2 * dalpha
 
         state = state._replace(
-            failed=state.failed or dalpha <= 1e-10
+            failed=state.failed or dalpha <= 1e-8
             )
+        if pars.ls_verbosity >= 4:
+            print('\t\t\titer {}, alpha between {} and {}'.format(
+                state.j, state.a_lo, state.a_hi))
 
-        # Cubmin is sometimes nan,
+        # Cubicmin is sometimes nan,
         # though in this case the bounds check will fail.
-        a_j_cu = _cubicmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi,
-                           state.f_hi, state.a_rec, state.f_rec)
-        use_cubic = (state.j > 0) & (a_j_cu > a + cchk) & (a_j_cu < b - cchk)
-        a_j_quad = _quadmin(state.a_lo, state.f_lo, state.df_lo, state.a_hi,
-                            state.f_hi)
-        use_quad = (~use_cubic) & (a_j_quad > a + qchk) & (a_j_quad < b - qchk)
-        a_j_bisection = (state.a_lo + state.a_hi) / 2.
-        use_bisection = (~use_cubic) & (~use_quad)
+        a_j = state.a_rec
+        a_j_cu = _cubicmin(state.a_lo, state.f_lo, state.df_lo,
+                           state.a_hi, state.f_hi, state.a_rec, state.f_rec)
+        if (state.j > 0) & (a_j_cu > a + cchk) & (a_j_cu < b - cchk):
+            a_j = a_j_cu
+        else:
+            a_j_quad = _quadmin(state.a_lo, state.f_lo, state.df_lo,
+                                state.a_hi, state.f_hi)
+            if (a_j_quad > a + qchk) & (a_j_quad < b - qchk):
+                a_j = a_j_quad
+            else:
+                a_j = (state.a_lo + state.a_hi) / 2.
 
-        a_j = jnp.where(use_cubic, a_j_cu, state.a_rec)
-        a_j = jnp.where(use_quad, a_j_quad, a_j)
-        a_j = jnp.where(use_bisection, a_j_bisection, a_j)
-
-        f_j, df_j, g_j = cost_and_grad(a_j)
+        f_j, g_j, df_j = cost_and_grad(a_j)
         state = state._replace(
             nfev=state.nfev + 1,
             ngev=state.ngev + 1
             )
+        if pars.ls_verbosity >= 4:
+            print('\t\t\ta_j={} -> f_j {:.1f}, f_lo {:.1f}, Wolfe1: {}'.format(
+                a_j, f_j, state.f_lo, wolfe_one(a_j, f_j)))
+            print('\t\t\t  df_j {:.1f}, df_lo {:.1f}, Wolfe2: {}'.format(
+                df_j, state.df_lo, wolfe_two(df_j)))
 
-        hi_to_j = wolfe_one(a_j, f_j) | (f_j >= state.f_lo)
-        star_to_j = wolfe_two(df_j) & (~hi_to_j)
-        hi_to_lo = (df_j * (state.a_hi - state.a_lo) >= 0.) & \
-            (~hi_to_j) & (~star_to_j)
-        lo_to_j = (~hi_to_j) & (~star_to_j)
-
-        state = state._replace(
-            **_binary_replace(
-                hi_to_j,
-                state._asdict(),
-                dict(
-                    a_hi=a_j,
-                    f_hi=f_j,
-                    df_hi=df_j,
-                    a_rec=state.a_hi,
-                    f_rec=state.f_hi,
-                    )
+        if wolfe_one(a_j, f_j) | (f_j >= state.f_lo):
+            state = state._replace(
+                a_hi=a_j,
+                f_hi=f_j,
+                df_hi=df_j,
+                a_rec=state.a_hi,
+                f_rec=state.f_hi
                 )
-            )
+            # if pars.ls_verbosity >= 4:
+            #     print('\t\t\ta_hi = a_j')
+        elif wolfe_two(df_j):
+            state = state._replace(
+                done=(True or state.done),
+                a_star=a_j,
+                f_star=f_j,
+                df_star=df_j,
+                g_star=g_j
+                )
+            # if pars.ls_verbosity >= 4:
+            #     print('\t\t\ta_star = a_j')
+        elif (df_j * (state.a_hi - state.a_lo) >= 0):
+            state = state._replace(
+                a_hi=a_lo,
+                f_hi=f_lo,
+                df_hi=df_lo,
+                a_rec=state.a_hi,
+                f_rec=state.f_hi
+                )
+            # if pars.ls_verbosity >= 4:
+            #     print('\t\t\ta_hi = a_lo')
+        else:
+            state = state._replace(
+                a_lo=a_j,
+                f_lo=f_j,
+                df_lo=df_j,
+                a_rec=state.a_lo,
+                f_rec=state.f_lo
+                )
+            # if pars.ls_verbosity >= 4:
+            #     print('\t\t\ta_lo = a_j')
 
-        # Termination
-        state = state._replace(
-            done=star_to_j | state.done,
-            **_binary_replace(
-                star_to_j,
-                state._asdict(),
-                dict(
-                    a_star=a_j,
-                    f_star=f_j,
-                    df_star=df_j,
-                    g_star=g_j,
-                    )
-                ),
-            )
-        state = state._replace(
-            **_binary_replace(
-                hi_to_lo,
-                state._asdict(),
-                dict(
-                    a_hi=a_lo,
-                    f_hi=f_lo,
-                    df_hi=df_lo,
-                    a_rec=state.a_hi,
-                    f_rec=state.f_hi,
-                    ),
-                ),
-            )
-        state = state._replace(
-            **_binary_replace(
-                lo_to_j,
-                state._asdict(),
-                dict(
-                    a_lo=a_j,
-                    f_lo=f_j,
-                    df_lo=df_j,
-                    a_rec=state.a_lo,
-                    f_rec=state.f_lo,
-                    ),
-                ),
-            )
         state = state._replace(j=state.j + 1)
+
+    if state.failed:
+        state = state._replace(
+            a_star=state.a_lo,
+            f_star=state.f_lo,
+            df_star=state.df_lo,
+            g_star=g_j,
+            )
+        if pars.ls_verbosity >= 3:
+            print('\t\tZoom failed, a_star = {}'.format(state.a_star))
+    else:
+        if pars.ls_verbosity >= 3:
+            print('\t\tZoom done, a_star = {}'.format(state.a_star))
     return state
 
 
-def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
-
-    ls_pars = _LineSearchParameter(
-        **pars
-        )
+def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, ls_pars):
 
     # Wolfe conditions
     def wolfe_one(ai, fi):
         return fi > f0 + ls_pars.ls_suff_decr * ai * df0
 
     def wolfe_two(dfi):
-        return jnp.abs(dfi) <= ls_pars.ls_curvature * df0
+        return jnp.abs(dfi) <= - ls_pars.ls_curvature * df0
 
     state = _LineSearchState(
         done=False,
@@ -282,6 +281,9 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
         g_star=g0,
         saddle_point=False
         )
+
+    if ls_pars.ls_verbosity >= 1:
+        print('\tStarting linesearch...')
 
     while ((~state.done) & (state.i <= ls_pars.ls_maxiter) & (~state.failed)):
         # no amax in this version, we just double as in scipy.
@@ -301,65 +303,58 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
             saddle_point=saddle_point
             )
 
+        if ls_pars.ls_verbosity >= 2:
+            print('\titer: {}\n\t\talpha: {:.2f}'.format(state.i, ai))
+
         fi, gri, dfi = cost_and_grad(ai)
         state = state._replace(
             nfev=state.nfev + 1,
             ngev=state.ngev + 1
             )
 
-        star_zoom1 = wolfe_one(ai, fi) or ((fi >= state.fi) and (state.i > 1))
-        star_i = wolfe_two(dfi) and (~star_zoom1)
-        star_zoom2 = (dfi >= 0) and (~star_zoom1) and (~star_i)
-
-        zoom1 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
-                      state.ai, state.fi, state.dfi, ai, fi, dfi, gri,
-                      ~star_zoom1)
-        state = state._replace(
-            nfev=state.nfev + zoom1.nfev,
-            ngev=state.ngev + zoom1.ngev
-            )
-
-        zoom2 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
-                      state.ai, state.fi, state.dfi, ai, fi, dfi, gri,
-                      ~star_zoom2)
-        state = state._replace(
-            nfev=state.nfev + zoom2.nfev,
-            ngev=state.ngev + zoom2.ngev
-            )
-
-        state = state._replace(
-            done=(star_zoom1 or state.done),
-            failed=((star_zoom1 & zoom1.failed) or state.failed),
-            **_binary_replace(
-                star_zoom1,
-                state._asdict(),
-                zoom1._asdict(),
-                keys=['a_star', 'f_star', 'df_star', 'g_star']
+        if wolfe_one(ai, fi) or ((fi > state.fi) and state.i > 1):
+            if ls_pars.ls_verbosity >= 2:
+                print('\t\tEntering zoom1...')
+            zoom1 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
+                          state.ai, state.fi, state.dfi, ai, fi, dfi,
+                          gri, ls_pars)
+            state = state._replace(
+                done=(zoom1.done or state.done),
+                failed=(zoom1.failed or state.failed),
+                a_star=zoom1.a_star,
+                f_star=zoom1.f_star,
+                df_star=zoom1.df_star,
+                g_star=zoom1.g_star,
+                nfev=state.nfev + zoom1.nfev,
+                ngev=state.ngev + zoom1.ngev
                 )
-            )
-        state = state._replace(
-            done=(star_i or state.done),
-            **_binary_replace(
-                star_i,
-                state._asdict(),
-                dict(
-                    a_star=ai,
-                    f_star=fi,
-                    df_star=dfi,
-                    g_star=gri,
-                    )
+        elif wolfe_two(dfi):
+            if ls_pars.ls_verbosity >= 2:
+                print('\t\tWolfe two condition met, stopping')
+            state = state._replace(
+                done=(True or state.done),
+                a_star=ai,
+                f_star=fi,
+                df_star=dfi,
+                g_star=gri
                 )
-            )
-        state = state._replace(
-            done=(star_zoom2 or state.done),
-            failed=((star_zoom2 & zoom2.failed) or state.failed),
-            **_binary_replace(
-                star_zoom2,
-                state._asdict(),
-                zoom2._asdict(),
-                keys=['a_star', 'f_star', 'df_star', 'g_star']
+        elif dfi >= 0:
+            if ls_pars.ls_verbosity >= 2:
+                print('\t\tEntering zoom2')
+            zoom2 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
+                          ai, fi, dfi, state.ai, state.fi, state.dfi,
+                          gri, ls_pars)
+            state = state._replace(
+                done=(zoom2.done or state.done),
+                failed=(zoom2.failed or state.failed),
+                a_star=zoom2.a_star,
+                f_star=zoom2.f_star,
+                df_star=zoom2.df_star,
+                g_star=zoom2.g_star,
+                nfev=state.nfev + zoom2.nfev,
+                ngev=state.ngev + zoom2.ngev
                 )
-            )
+
         state = state._replace(
             i=state.i + 1,
             ai=ai,
@@ -379,6 +374,9 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
                 ),
             ),
         )
+    if ls_pars.ls_verbosity >= 1:
+        print('\tLinesearch {} with status {}'.format(
+            'failed' if state.failed else 'done', status))
     result = _LineSearchResult(
         failed=(state.failed | (~state.done)),
         nit=state.i - 1,  # because iterations started at 1
@@ -386,7 +384,7 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, **pars):
         ngev=state.ngev,
         k=state.i,
         a_k=state.a_star,
-        f_k=state.phi_star,
+        f_k=state.f_star,
         g_k=state.g_star,
         status=status,
         )

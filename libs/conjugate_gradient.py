@@ -1,6 +1,7 @@
 import time
 import jax.numpy as jnp
 from typing import NamedTuple, Union
+from libs.linesearch import wolfe_linesearch, LineSearchParameter
 
 
 class OptimizerParams(NamedTuple):
@@ -36,37 +37,6 @@ class OptimizerParams(NamedTuple):
     betamethod: str = "hestenesstiefel"
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
-
-
-class LineSearchParameter(NamedTuple):
-    """
-    Parameters for the linesearch algorithm.
-
-    Arguments:
-        - ls_maxiter (int, default 10)
-            maximum number of iterations
-        - ls_minstepsize  (float, default 1e-16)
-            minimum length of the stepsize
-        - ls_optimism (float, default 1.2)
-            optimism of the new step
-        - ls_initial_step (float, default 1)
-            initial stepsize before linesearch
-        - ls_suff_decr (float, default 1e-4)
-            sufficient decrease parameter
-        - ls_contraction (float, default 0.5)
-            contraction factor (must be 0 < c < 1)
-        - ls_verbosity (int, default 0)
-            Level of information to be displayed:
-            < 3 is silent, 3+ basic info
-    """
-
-    ls_maxiter: Union[int, jnp.ndarray] = 10
-    ls_minstepsize: Union[float, jnp.ndarray] = 1e-16
-    ls_optimism: Union[float, jnp.ndarray] = 1.2
-    ls_initial_step: Union[float, jnp.ndarray] = 1
-    ls_suff_decr: Union[float, jnp.ndarray] = 1e-4
-    ls_contraction: Union[float, jnp.ndarray] = 0.5
-    ls_verbosity: Union[int, jnp.ndarray] = 0
 
 
 class OptimizerResult(NamedTuple):
@@ -116,7 +86,7 @@ class OptimizerResult(NamedTuple):
     stepsize: jnp.ndarray
     time: jnp.ndarray
 
-    def __str__(self):
+    def __repr__(self):
         """Representation method."""
         try:
             sz = self.x.size
@@ -136,30 +106,6 @@ class OptimizerResult(NamedTuple):
                 self.fun, self.grnorm, self.stepsize,
                 self.x if sz < 50 else '\t... Too big to show...'
                 )
-
-
-class LineSearchResult(NamedTuple):
-    """
-    Object holding linesearch results.
-
-    Components:
-        - alpha:
-            name of the optimizer
-        - x:
-            final solution.
-        - fun:
-            final function value.
-        - nit:
-            iterations of the linesearch algorithm.
-        - stepsize:
-            length of the final stepsize
-    """
-
-    alpha: jnp.ndarray
-    x: jnp.ndarray
-    fun: jnp.ndarray
-    nit: Union[int, jnp.ndarray]
-    stepsize: jnp.ndarray
 
 
 class OptimizerLog(NamedTuple):
@@ -325,6 +271,11 @@ class RCG():
         self._ls_pars = LineSearchParameter(
             **{k: pars[k] for k in pars if k in LineSearchParameter._fields}
             )
+        if pars.get('ls_verbosity', None) is None:
+            self._ls_pars = self._ls_pars._replace(
+                ls_verbosity=max(0, self._parms.verbosity - 3)
+                )
+
         if self._parms.betamethod.lower() in self.BetaAvailable:
             self.compute_beta = _betachoice(
                 self._parms.betamethod.lower(),
@@ -395,15 +346,15 @@ class RCG():
 
         stepsize = abs(alpha * dnorm)
 
-        lsresult = LineSearchResult(
-            alpha=alpha,
-            nit=k-1,
-            x=newx,
-            fun=newf,
-            stepsize=stepsize
-            )
+        # lsresult = LineSearchResult(
+        #     alpha=alpha,
+        #     nit=k-1,
+        #     x=newx,
+        #     fun=newf,
+        #     stepsize=stepsize
+        #     )
 
-        return lsresult
+        # return lsresult
 
     def solve(self, objective, gradient, x=None, key=None):
         """
@@ -431,7 +382,6 @@ class RCG():
 
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
-        t_start = time.time()
 
         self._costev = 0
         self._gradev = 0
@@ -444,8 +394,8 @@ class RCG():
             self._gradev += 1
             return self.man.egrad2rgrad(x, gradient(x))
 
-        def ls(x, d, f0, df0, old_f0):
-            return self._linesearch(cost, x, d, f0, df0, old_f0)
+        def ls(c_a_g, x, d, f0, df0, g0):
+            return wolfe_linesearch(c_a_g, x, d, f0, df0, g0, self._ls_pars)
 
         if x is None:
             try:
@@ -459,12 +409,11 @@ class RCG():
         stepsize = 1.
         f0 = cost(x)
         gr = grad(x)
-
         grnorm = self.man.norm(x, gr)
 
         d = - gr
-        old_f0 = jnp.inf
 
+        t_start = time.time()
         if self._parms.logverbosity:
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
@@ -480,6 +429,24 @@ class RCG():
                 )
 
         while True:
+            if k == 1:
+                first_iter_time = time.time() - t_start
+
+            df0 = self.man.inner(x, gr, d)
+
+            if df0 >= 0:
+                if self._parms.verbosity >= 2:
+                    print("Conjugate gradient info: got an ascent direction "
+                          "(df0 = {:.2f}), reset to the (preconditioned) "
+                          "steepest descent direction.".format(df0))
+                d = - gr
+                df0 = - grnorm
+
+            if self._parms.verbosity >= 2:
+                print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
+                print('\tgrad norm: {:.2f}'.format(grnorm))
+                print('\tdirectional derivative: {:.2f}'.format(df0))
+
             try:
                 status = self._check_stopping_criterion(
                     t_start,
@@ -503,31 +470,31 @@ class RCG():
                         )
                 break
 
-            df0 = self.man.inner(x, gr, d)
+            def cost_and_grad(t):
+                xnew = self.man.retraction(x, t * d)
+                fn = cost(xnew)
+                gn = grad(xnew)
+                dn = self.man.inner(xnew, - gn, gn)
+                # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
+                return fn, gn, dn
 
-            if df0 >= 0:
-                if self._parms.verbosity >= 2:
-                    print("Conjugate gradient info: got an ascent direction "
-                          "(df0 = {:.2f}), reset to the (preconditioned) "
-                          "steepest descent direction.".format(df0))
-                d = - gr
-                df0 = - grnorm
+            ls_results = ls(cost_and_grad, x, d, f0, df0, gr)
 
-            ls_results = ls(x, d, f0, df0, old_f0)
-
-            alpha = ls_results.alpha
-            stepsize = ls_results.stepsize
-            newx = ls_results.x
-            newf = ls_results.fun
-            newd = self.man.vector_transport(x, alpha * d, d)
-
-            newgr = grad(x)
+            alpha = ls_results.a_k
+            stepsize = jnp.abs(alpha * df0)
+            newx = self.man.retraction(x, alpha * d)
+            newf = ls_results.f_k
+            newgr = ls_results.g_k
             newgrnorm = self.man.norm(newx, newgr)
+            newd = self.man.vector_transport(x, alpha * d, d)
 
             beta = self.compute_beta(x, newx, gr, newgr, alpha * d, newd)
             d = - newgr + beta * newd
 
-            old_f0 = f0
+            if self._parms.verbosity >= 2:
+                print('\talpha: {}'.format(alpha))
+                print('\tbeta: {}'.format(beta))
+
             x = newx
             f0 = newf
             gr = newgr
@@ -560,7 +527,7 @@ class RCG():
             ngev=self._gradev,
             nit=k,
             stepsize=stepsize,
-            time=time.time() - t_start
+            time=(time.time() - t_start)
             )
 
         if self._parms.logverbosity:

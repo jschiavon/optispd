@@ -1,6 +1,7 @@
 import time
 import jax.numpy as jnp
 from typing import NamedTuple, Union
+from libs.linesearch import wolfe_linesearch, LineSearchParameter
 
 
 class OptimizerParams(NamedTuple):
@@ -27,43 +28,12 @@ class OptimizerParams(NamedTuple):
     """
 
     maxtime: Union[float, jnp.ndarray] = 100
-    maxiter: Union[int, jnp.ndarray] = 500
+    maxiter: Union[int, jnp.ndarray] = 100
     mingradnorm: Union[float, jnp.ndarray] = 1e-6
     minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
-
-
-class LineSearchParameter(NamedTuple):
-    """
-    Parameters for the linesearch algorithm.
-
-    Arguments:
-        - ls_maxiter (int, default 10)
-            maximum number of iterations
-        - ls_minstepsize  (float, default 1e-16)
-            minimum length of the stepsize
-        - ls_optimism (float, default 1.2)
-            optimism of the new step
-        - ls_initial_step (float, default 1)
-            initial stepsize before linesearch
-        - ls_suff_decr (float, default 1e-4)
-            sufficient decrease parameter
-        - ls_contraction (float, default 0.5)
-            contraction factor (must be 0 < c < 1)
-        - ls_verbosity (int, default 0)
-            Level of information to be displayed:
-            < 3 is silent, 3+ basic info
-    """
-
-    ls_maxiter: Union[int, jnp.ndarray] = 10
-    ls_minstepsize: Union[float, jnp.ndarray] = 1e-16
-    ls_optimism: Union[float, jnp.ndarray] = 1.2
-    ls_initial_step: Union[float, jnp.ndarray] = 1
-    ls_suff_decr: Union[float, jnp.ndarray] = 1e-4
-    ls_contraction: Union[float, jnp.ndarray] = 0.5
-    ls_verbosity: Union[int, jnp.ndarray] = 0
 
 
 class OptimizerResult(NamedTuple):
@@ -113,7 +83,7 @@ class OptimizerResult(NamedTuple):
     stepsize: jnp.ndarray
     time: jnp.ndarray
 
-    def __str__(self):
+    def __repr__(self):
         """Representation method."""
         try:
             sz = self.x.size
@@ -133,30 +103,6 @@ class OptimizerResult(NamedTuple):
                 self.fun, self.grnorm, self.stepsize,
                 self.x if sz < 50 else '\t... Too big to show...'
                 )
-
-
-class LineSearchResult(NamedTuple):
-    """
-    Object holding linesearch results.
-
-    Components:
-        - alpha:
-            name of the optimizer
-        - x:
-            final solution.
-        - fun:
-            final function value.
-        - nit:
-            iterations of the linesearch algorithm.
-        - stepsize:
-            length of the final stepsize
-    """
-
-    alpha: jnp.ndarray
-    x: jnp.ndarray
-    fun: jnp.ndarray
-    nit: Union[int, jnp.ndarray]
-    stepsize: jnp.ndarray
 
 
 class OptimizerLog(NamedTuple):
@@ -253,6 +199,10 @@ class RSD():
         self._ls_pars = LineSearchParameter(
             **{k: pars[k] for k in pars if k in LineSearchParameter._fields}
             )
+        if pars.get('ls_verbosity', None) is None:
+            self._ls_pars = self._ls_pars._replace(
+                ls_verbosity=max(0, self._parms.verbosity - 3)
+                )
 
     def __str__(self):
         """Representat the optimizer as a string."""
@@ -309,14 +259,14 @@ class RSD():
 
         stepsize = abs(alpha * dnorm)
 
-        lsresult = LineSearchResult(
-            alpha=alpha,
-            nit=k-1,
-            x=newx,
-            fun=newf,
-            stepsize=stepsize
-            )
-        return lsresult
+        # lsresult = LineSearchResult(
+        #     alpha=alpha,
+        #     nit=k-1,
+        #     x=newx,
+        #     fun=newf,
+        #     stepsize=stepsize
+        #     )
+        # return lsresult
 
     def solve(self, objective, gradient, x=None, key=None):
         """
@@ -348,7 +298,6 @@ class RSD():
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
 
-        t_start = time.time()
         self._costev = 0
         self._gradev = 0
 
@@ -360,8 +309,8 @@ class RSD():
             self._gradev += 1
             return self.man.egrad2rgrad(x, gradient(x))
 
-        def ls(x, d, f0, df0, old_f0):
-            return self._linesearch(cost, x, d, f0, df0, old_f0)
+        def ls(c_a_g, x, d, f0, df0, g0):
+            return wolfe_linesearch(c_a_g, x, d, f0, df0, g0, self._ls_pars)
 
         if x is None:
             try:
@@ -372,11 +321,15 @@ class RSD():
                                  " to perform random initialization")
 
         k = 0
-        stepsize = jnp.inf
-        old_f0 = 1.
+        stepsize = 1.
         f0 = cost(x)
-        G = grad(x)
-        grnorm = self.man.norm(x, G)
+        gr = grad(x)
+        grnorm = self.man.norm(x, gr)
+        d = - gr
+        df0 = self.man.inner(x, d, gr)
+        # df0 = -jnp.sqrt(jnp.abs(df0)) if df0 < 0 else jnp.sqrt(df0)
+
+        t_start = time.time()
         if self._parms.logverbosity:
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
@@ -391,9 +344,13 @@ class RSD():
                 )
 
         while True:
+            if k == 1:
+                first_iter_time = time.time() - t_start
+
             if self._parms.verbosity >= 2:
                 print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
+                print('\tdirectional derivative: {:.2f}'.format(df0))
 
             status = self._check_stopping_criterion(
                 t_start,
@@ -412,23 +369,28 @@ class RSD():
                         )
                 break
 
-            d = - G
-            df0 = self.man.inner(x, d, G)
-            if self._parms.verbosity >= 2:
-                print('\tdirectional derivative: {:.2f}'.format(df0))
+            def cost_and_grad(t):
+                xnew = self.man.retraction(x, t * d)
+                fn = cost(xnew)
+                gn = grad(xnew)
+                dn = self.man.inner(xnew, - gn, gn)
+                # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
+                return fn, gn, dn
 
-            ls_results = ls(x, d, f0, df0, old_f0)
+            ls_results = ls(cost_and_grad, x, d, f0, df0, gr)
 
-            stepsize = ls_results.stepsize
-            x = ls_results.x
-            old_f0 = f0
-            f0 = ls_results.fun
-            if self._parms.verbosity >= 2:
-                print('\tstepsize: {:.2f}'.format(stepsize))
-
-            G = grad(x)
-            grnorm = self.man.norm(x, G)
+            alpha = ls_results.a_k
+            stepsize = jnp.abs(alpha * df0)
+            x = self.man.retraction(x, alpha * d)
+            f0 = ls_results.f_k
+            gr = ls_results.g_k
+            grnorm = self.man.norm(x, gr)
+            d = - gr
+            df0 = self.man.inner(x, d, gr)
+            # df0 = -jnp.sqrt(jnp.abs(df0)) if df0 < 0 else jnp.sqrt(df0)
             k += 1
+            if self._parms.verbosity >= 2:
+                print('\talpha: {}'.format(alpha))
 
             if self._parms.logverbosity:
                 logs = logs._replace(
@@ -439,7 +401,7 @@ class RSD():
                     gev=jnp.append(logs.gev, self._gradev),
                     it=jnp.append(logs.it, k),
                     stepsize=jnp.append(logs.stepsize, stepsize),
-                    time=jnp.append(logs.time, time.time() - logs.time[-1])
+                    time=jnp.append(logs.time, time.time() - t_start)
                     )
 
         result = OptimizerResult(
@@ -449,13 +411,13 @@ class RSD():
                 message=msg,
                 x=x,
                 fun=f0,
-                gr=G,
+                gr=gr,
                 grnorm=grnorm,
                 nfev=self._costev,
                 ngev=self._gradev,
                 nit=k,
                 stepsize=stepsize,
-                time=time.time() - t_start
+                time=(time.time() - t_start)
                 )
 
         if self._parms.logverbosity:

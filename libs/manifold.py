@@ -381,11 +381,13 @@ class Product():
 
     def parallel_transport(self, X, Y, U):
         return _ProductTangentVector(
-            [man.parallel_transport(X[k], Y[k], U[k]) for k, man in enumerate(self._man)])
+            [man.parallel_transport(X[k], Y[k], U[k])
+                for k, man in enumerate(self._man)])
 
     def vector_transport(self, X, U, W):
         return _ProductTangentVector(
-            [man.parallel_transport(X[k], U[k], W[k]) for k, man in enumerate(self._man)])
+            [man.vector_transport(X[k], U[k], W[k])
+                for k, man in enumerate(self._man)])
 
 
 class _ProductTangentVector(list):
@@ -394,11 +396,13 @@ class _ProductTangentVector(list):
 
     def __add__(self, other):
         assert len(self) == len(other)
-        return _ProductTangentVector([v + other[k] for k, v in enumerate(self)])
+        return _ProductTangentVector(
+            [v + other[k] for k, v in enumerate(self)])
 
     def __sub__(self, other):
         assert len(self) == len(other)
-        return _ProductTangentVector([v - other[k] for k, v in enumerate(self)])
+        return _ProductTangentVector(
+            [v - other[k] for k, v in enumerate(self)])
 
     def __mul__(self, other):
         return _ProductTangentVector([other * val for val in self])
