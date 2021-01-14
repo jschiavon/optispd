@@ -1,26 +1,29 @@
-import numpy as np
-
 import jax.numpy as jnp
 from jax import jit, random, grad
 from jax.config import config
-
-from libs.manifold import SPD, Product, Euclidean
-from libs.minimizer import OPTIM
-
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set("notebook")
+from jax.scipy.optimize import minimize
+from scipy.optimize import minimize as minim
+from jax.ops import index_update
+from time import time
 
 config.update('jax_enable_x64', True)
 seed = 42
 RNG = random.PRNGKey(seed)
 
+from libs.manifold import SPD, Product, Euclidean
+from libs.minimizer import OPTIM
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set("notebook")
+
+
 n_samples = 1000
-p = 4
+p = 50
 tol = 1e-4
 maxiter = 100
-plots = True
+plots = False
 
 orig_man = Product([SPD(p), Euclidean(p)])
 man = SPD(p + 1)
@@ -30,10 +33,11 @@ if plots:
                       logverbosity=True)
     optim_rep_rsd = OPTIM(man, method='rsd', maxiter=maxiter,
                           mingradnorm=tol, verbosity=1, logverbosity=True)
-optim_rep = OPTIM(man, method='rcg', bethamethod='hybridhsdy',
-                  maxiter=maxiter, mingradnorm=tol, verbosity=1)
-optim_rep_rsd = OPTIM(man, method='rsd',
+else:
+    optim_rep = OPTIM(man, method='rcg', bethamethod='hybridhsdy',
                       maxiter=maxiter, mingradnorm=tol, verbosity=1)
+    optim_rep_rsd = OPTIM(man, method='rsd',
+                          maxiter=maxiter, mingradnorm=tol, verbosity=1)
 # optim_ori = OPTIM(orig_man, method='rcg', maxiter=maxiter, mingradnorm=tol, verbosity=1, logverbosity=True)
 
 
@@ -45,9 +49,13 @@ s_mu = jnp.mean(data, axis=0)
 S = jnp.dot((data - s_mu).T, data - s_mu)
 s_cov = S / n_samples
 
+
 MLE_ori = [s_cov, s_mu]
 MLE_rep = jnp.append(jnp.append(s_cov + jnp.outer(s_mu, s_mu), jnp.array([s_mu]), axis=0),
                      jnp.array([jnp.append(s_mu, 1)]).T, axis=1)
+MLE_chol = jnp.linalg.cholesky(MLE_rep)
+MLE_chol = MLE_chol.T[~(MLE_chol.T == 0.)].ravel()
+
 init_ori = [t_cov, t_mu]
 init_rep = jnp.append(jnp.append(t_cov + jnp.outer(t_mu, t_mu), jnp.array([t_mu]), axis=0),
                       jnp.array([jnp.append(t_mu, 1)]).T, axis=1) * 0.9
@@ -63,6 +71,26 @@ def nloglik_orig(X):
     cov, mean = tuple(X)
     S = jnp.matmul((data - mean).T, data - mean)
     return 0.5 * (n_samples * jnp.linalg.slogdet(cov)[1] + jnp.trace(jnp.linalg.solve(cov, S)))
+
+
+def nloglik_chol(X):
+    cov = index_update(
+        jnp.zeros(shape=(p+1, p+1)),
+        jnp.triu_indices(p+1),
+        X).T
+    logdet = 2 + jnp.sum(jnp.diag(cov))
+    y = jnp.concatenate([data.T, jnp.ones(shape=(1, n_samples))], axis=0)
+    sol = jnp.linalg.solve(cov, y)
+    return 0.5 * (n_samples * logdet + jnp.einsum('ij,ij', sol, sol))
+
+
+fun_chol = jit(nloglik_chol)
+gra_chol = jit(grad(fun_chol))
+
+true_fun_chol = fun_chol(MLE_chol)
+true_gra_chol = gra_chol(MLE_chol)
+print('Cholesky function on MLE: ', true_fun_chol)
+print('Gradient norm of cholesky function on MLE: ', jnp.linalg.norm(true_gra_chol))
 
 
 fun_rep = jit(nloglik)
@@ -86,16 +114,27 @@ print('Gradient norm of original function on MLE: ', true_grnorm_ori)
 
 init_rep = jnp.identity(p + 1)
 init_ori = [jnp.identity(p), jnp.zeros((p))]
+init_chol = jnp.ones_like(MLE_chol)
 
 # print('\n', init_rep)
 if plots:
-    results_rep, log_rep = optim_rep.solve(fun_rep, gra_rep, x=init_rep)
+    # results_rep, log_rep = optim_rep.solve(fun_rep, gra_rep, x=init_rep)
     results_rep_rsd, log_rep_rsd = optim_rep_rsd.solve(fun_rep, gra_rep, x=init_rep)
 else:
-    results_rep = optim_rep.solve(fun_rep, gra_rep, x=init_rep)
+    # results_rep = optim_rep.solve(fun_rep, gra_rep, x=init_rep)
     results_rep_rsd = optim_rep_rsd.solve(fun_rep, gra_rep, x=init_rep)
-print(results_rep)
+# print(results_rep)
 print(results_rep_rsd)
+
+# res = minimize(fun_chol, init_chol, method='BFGS', tol=tol)
+start = time()
+res = minim(fun_chol, init_chol, method='cg', jac=gra_chol, tol=tol)
+print(res['message'], 'in {:.2f} s'.format(time() - start))
+cov = index_update(
+    jnp.zeros(shape=(p+1, p+1)),
+    jnp.triu_indices(p+1),
+    res.x).T
+print(man.dist(cov @ cov.T, results_rep_rsd.x))
 # print(MLE_rep)
 
 # print('\n', init_ori)
