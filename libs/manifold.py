@@ -337,13 +337,15 @@ class Euclidean():
 class Product():
     """Product manifold."""
 
-    def __init__(self, manifolds):
+    def __init__(self, *manifolds):
         """Product manifold from an iterable of manifolds objects."""
+        if len(manifolds) == 1:
+            manifolds = manifolds[0]
         self._man = tuple(manifolds)
         self._len_man = len(self._man)
         self._name = "Product manifold: {:s}".format(
             " x ".join([str(man) for man in manifolds]))
-        self._dimension = jnp.sum(jnp.array([man.dim for man in manifolds]))
+        self._dimension = jnp.sum(jnp.array([man.dim for man in self._man]))
 
     def __str__(self):
         """Return a string representation of the manifold."""
