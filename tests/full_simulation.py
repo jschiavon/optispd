@@ -25,21 +25,25 @@ from jax import jit, random, grad
 from jax.config import config
 from scipy.optimize import minimize
 from jax.ops import index_update, index
+
 from time import time
-
-config.update('jax_enable_x64', True)
-seed = 0
-RNG = random.PRNGKey(seed)
-
-from libs.manifold import SPD, Product, Euclidean
-from libs.minimizer import OPTIM
 from tqdm import trange
+import os
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set("notebook")
 
+config.update('jax_enable_x64', True)
+seed = 0
+RNG = random.PRNGKey(seed)
+
+from .libs.manifold import SPD, Product, Euclidean
+from .libs.minimizer import OPTIM
+
+sims_dir = "simulations"
+os.makedirs(sims_dir, exist_ok=True)
 
 n_samples = 1000
 
@@ -60,10 +64,12 @@ for p in ps:
     man = SPD(p + 1)
     print(orig_man)
 
-    optim_rep = OPTIM(man, method='rcg', bethamethod='hybridhsdy',
-                      maxiter=maxiter, mingradnorm=tol, verbosity=0)
-    optim_rep_rsd = OPTIM(man, method='rsd',
-                          maxiter=maxiter, mingradnorm=tol, verbosity=0)
+    optim_rcg = OPTIM(man, method='rcg', bethamethod='hybridhsdy',
+                      maxiter=maxiter, mingradnorm=tol,
+                      verbosity=0, logverbosity=logs)
+    optim_rsd = OPTIM(man, method='rsd',
+                          maxiter=maxiter, mingradnorm=tol,
+                          verbosity=0, logverbosity=logs)
 
     for _ in trange(n_tests):
         RNG, key = random.split(RNG)
@@ -116,7 +122,7 @@ for p in ps:
         init_rep = jnp.identity(p + 1)
         init_chol = jnp.ones_like(MLE_chol)
 
-        result_rcg = optim_rep.solve(fun_rep, gra_rep, x=init_rep)
+        result_rcg = optim_rcg.solve(fun_rep, gra_rep, x=init_rep)
         res_rcg = index_update(res_rcg, index[run, 0], p)
         res_rcg = index_update(res_rcg, index[run, 1], result_rcg.time)
         res_rcg = index_update(res_rcg, index[run, 2], result_rcg.nit)
@@ -126,7 +132,7 @@ for p in ps:
         res_rcg = index_update(res_rcg, index[run, 6], 0.)
         # print(result_rcg)
 
-        result_rsd = optim_rep_rsd.solve(fun_rep, gra_rep, x=init_rep)
+        result_rsd = optim_rsd.solve(fun_rep, gra_rep, x=init_rep)
         res_rsd = index_update(res_rsd, index[run, 0], p)
         res_rsd = index_update(res_rsd, index[run, 1], result_rsd.time)
         res_rsd = index_update(res_rsd, index[run, 2], result_rsd.nit)
@@ -172,7 +178,7 @@ for p in ps:
 
     df['Algorithm'] = df['Algorithm'].apply(lambda x: algo(x))
 
-    df.to_csv('Simulation{}.csv'.format(p), index=False)
+    df.to_csv(os.path.join(sims_dir, "Simulation{}.csv".format(p)), index=False)
 # if logs:
 #     f, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(14, 21))
 #
