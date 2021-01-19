@@ -109,8 +109,8 @@ class OptimizerResult(NamedTuple):
     stepsize: jnp.ndarray
     time: jnp.ndarray
 
-    def __repr__(self):
-        """Representation method."""
+    def __str__(self):
+        """String representation."""
         try:
             sz = self.x.size
         except AttributeError:
@@ -129,6 +129,13 @@ class OptimizerResult(NamedTuple):
                 self.fun, self.grnorm, self.stepsize,
                 self.x if sz < 50 else '\t... Too big to show...'
                 )
+
+    def pprint(self):
+        """Print a concise summary of the result."""
+        succeded = self.success
+        message = "Optimization {}completed.".format("" if self.success else "not ")
+        details = "{} iterations in {:.3f} s".format(self.nit, self.time)
+        print(message + "\n\t" + details)
 
 
 class OptimizerLog(NamedTuple):

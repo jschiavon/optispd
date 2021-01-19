@@ -45,11 +45,11 @@ from .libs.minimizer import OPTIM
 sims_dir = "simulations"
 os.makedirs(sims_dir, exist_ok=True)
 
-n_samples = 1000
 
 n_tests = 50
 ps = [5, 10, 25, 50, 75, 100]
 
+N = 1000
 tol = 1e-4
 maxiter = 100
 logs = False
@@ -75,22 +75,20 @@ for p in ps:
         RNG, key = random.split(RNG)
         t_cov, t_mu = orig_man.rand(key)
         RNG, key = random.split(RNG)
-        data = random.multivariate_normal(key, mean=t_mu, cov=t_cov, shape=(n_samples,))
+        data = random.multivariate_normal(key, mean=t_mu, cov=t_cov, shape=(N,))
         s_mu = jnp.mean(data, axis=0)
-        s_cov = jnp.dot((data - s_mu).T, data - s_mu) / n_samples
+        s_cov = jnp.dot((data - s_mu).T, data - s_mu) / N
 
-        MLE_rep = jnp.append(jnp.append(s_cov + jnp.outer(s_mu, s_mu), jnp.array([s_mu]), axis=0),
+        MLE_rep = jnp.append(jnp.append(s_cov + jnp.outer(s_mu, s_mu),
+                                        jnp.array([s_mu]), axis=0),
                              jnp.array([jnp.append(s_mu, 1)]).T, axis=1)
         MLE_chol = jnp.linalg.cholesky(MLE_rep)
         MLE_chol = MLE_chol.T[~(MLE_chol.T == 0.)].ravel()
 
-        init_rep = jnp.append(jnp.append(t_cov + jnp.outer(t_mu, t_mu), jnp.array([t_mu]), axis=0),
-                              jnp.array([jnp.append(t_mu, 1)]).T, axis=1) * 0.9
-
         def nloglik(X):
-            y = jnp.concatenate([data.T, jnp.ones(shape=(1, n_samples))], axis=0)
-            S = jnp.matmul(y, y.T)
-            return 0.5 * (n_samples * jnp.linalg.slogdet(X)[1] + jnp.trace(jnp.linalg.solve(X, S)))
+            y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
+            datapart = jnp.trace(jnp.linalg.solve(X, jnp.matmul(y, y.T))
+            return 0.5 * (N * jnp.linalg.slogdet(X)[1] + datapart))
 
         def nloglik_chol(X):
             cov = index_update(
@@ -98,9 +96,9 @@ for p in ps:
                 jnp.triu_indices(p+1),
                 X).T
             logdet = 2 + jnp.sum(jnp.diag(cov))
-            y = jnp.concatenate([data.T, jnp.ones(shape=(1, n_samples))], axis=0)
+            y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
             sol = jnp.linalg.solve(cov, y)
-            return 0.5 * (n_samples * logdet + jnp.einsum('ij,ij', sol, sol))
+            return 0.5 * (N * logdet + jnp.einsum('ij,ij', sol, sol))
 
         fun_chol = jit(nloglik_chol)
         gra_chol = jit(grad(fun_chol))
@@ -126,21 +124,25 @@ for p in ps:
         res_rcg = index_update(res_rcg, index[run, 0], p)
         res_rcg = index_update(res_rcg, index[run, 1], result_rcg.time)
         res_rcg = index_update(res_rcg, index[run, 2], result_rcg.nit)
-        res_rcg = index_update(res_rcg, index[run, 3], result_rcg.fun - true_fun_rep)
-        res_rcg = index_update(res_rcg, index[run, 4], man.dist(result_rcg.x, MLE_rep))
+        res_rcg = index_update(res_rcg, index[run, 3],
+                               result_rcg.fun - true_fun_rep)
+        res_rcg = index_update(res_rcg, index[run, 4],
+                               man.dist(result_rcg.x, MLE_rep))
         res_rcg = index_update(res_rcg, index[run, 5], result_rcg.grnorm)
         res_rcg = index_update(res_rcg, index[run, 6], 0.)
-        # print(result_rcg)
+        # result_rcg.pprint()
 
         result_rsd = optim_rsd.solve(fun_rep, gra_rep, x=init_rep)
         res_rsd = index_update(res_rsd, index[run, 0], p)
         res_rsd = index_update(res_rsd, index[run, 1], result_rsd.time)
         res_rsd = index_update(res_rsd, index[run, 2], result_rsd.nit)
-        res_rsd = index_update(res_rsd, index[run, 3], result_rsd.fun - true_fun_rep)
-        res_rsd = index_update(res_rsd, index[run, 4], man.dist(result_rsd.x, MLE_rep))
+        res_rsd = index_update(res_rsd, index[run, 3],
+                               result_rsd.fun - true_fun_rep)
+        res_rsd = index_update(res_rsd, index[run, 4],
+                               man.dist(result_rsd.x, MLE_rep))
         res_rsd = index_update(res_rsd, index[run, 5], result_rsd.grnorm)
         res_rsd = index_update(res_rsd, index[run, 6], 1)
-        # print(result_rsd)
+        # result_rsd.pprint()
 
         start = time()
         res = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, tol=tol)
@@ -152,15 +154,18 @@ for p in ps:
         res_cho = index_update(res_cho, index[run, 0], p)
         res_cho = index_update(res_cho, index[run, 1], time() - start)
         res_cho = index_update(res_cho, index[run, 2], res['nit'])
-        res_cho = index_update(res_cho, index[run, 3], res['fun'] - true_fun_chol)
-        res_cho = index_update(res_cho, index[run, 4], man.dist(cov @ cov.T, MLE_rep))
+        res_cho = index_update(res_cho, index[run, 3],
+                               res['fun'] - true_fun_chol)
+        res_cho = index_update(res_cho, index[run, 4],
+                               man.dist(cov @ cov.T, MLE_rep))
         res_cho = index_update(res_cho, index[run, 5], jnp.linalg.norm(res.jac))
         res_cho = index_update(res_cho, index[run, 6], 2)
-        # print(man.dist(cov @ cov.T, MLE_rep))
-        # print(man.dist(results_rep_rsd.x, MLE_rep))ù
+
         run += 1
 
-    columns = ['Matrix dimension', 'Time', 'Iterations', 'Function difference', 'Matrix distance', 'Gradient norm', 'Algorithm']
+    columns = ['Matrix dimension',
+        'Time', 'Iterations', 'Function difference',
+        'Matrix distance', 'Gradient norm', 'Algorithm']
 
     df1 = pd.DataFrame(res_rcg, columns=columns)
     df2 = pd.DataFrame(res_rsd, columns=columns)
@@ -168,17 +173,11 @@ for p in ps:
 
     df = pd.concat([df1, df2, df3])
 
-    def algo(x):
-        if x == 0:
-            return 'R-CG'
-        elif x == 1:
-            return 'R-SD'
-        else:
-            return 'Cholesky'
+    algo = {'0': 'R-CG', '1': 'R-SD', '2': 'Cholesky'}
 
-    df['Algorithm'] = df['Algorithm'].apply(lambda x: algo(x))
+    df['Algorithm'] = df['Algorithm'].apply(lambda x: algo[str(x)])
 
-    df.to_csv(os.path.join(sims_dir, "Simulation{}.csv".format(p)), index=False)
+    df.to_csv(os.path.join(sims_dir, "mvn_{}.csv".format(p)), index=False)
 # if logs:
 #     f, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(14, 21))
 #
