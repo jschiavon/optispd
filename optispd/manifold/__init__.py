@@ -21,16 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from libs.steepest_descent import RSD
-from libs.conjugate_gradient import RCG
-
-
-def OPTIM(man, method='rsd', **pars):
-    """Thin wrapper for optimization algorithms on manifold."""
-    if method == 'rsd':
-        return RSD(man, **pars)
-    elif method == 'rcg':
-        return RCG(man, **pars)
-    else:
-        raise NotImplementedError("The selected method is not available yet. "
-                                  "Please use one of `rsd` or `rcg`")
+from optispd._src.euclidean import Euclidean
+from optispd._src.product import Product
+from optispd._src.spd import SPD

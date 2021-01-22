@@ -27,20 +27,24 @@ from scipy.optimize import minimize
 from jax.ops import index_update, index
 
 from time import time
-from tqdm import trange
+try:
+    from tqdm import trange
+except ModuleNotFoundError:
+    trange = range
 import os
 
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set("notebook")
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+# sns.set("notebook")
 
 config.update('jax_enable_x64', True)
+
+from optispd.minimizer import minimizer
+from optispd.manifold import SPD, Euclidean, Product
+
 seed = 0
 RNG = random.PRNGKey(seed)
-
-from .libs.manifold import SPD, Product, Euclidean
-from .libs.minimizer import OPTIM
 
 sims_dir = "simulations"
 os.makedirs(sims_dir, exist_ok=True)
@@ -87,8 +91,8 @@ for p in ps:
 
         def nloglik(X):
             y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
-            datapart = jnp.trace(jnp.linalg.solve(X, jnp.matmul(y, y.T))
-            return 0.5 * (N * jnp.linalg.slogdet(X)[1] + datapart))
+            datapart = jnp.trace(jnp.linalg.solve(X, jnp.matmul(y, y.T)))
+            return 0.5 * (N * jnp.linalg.slogdet(X)[1] + datapart)
 
         def nloglik_chol(X):
             cov = index_update(
