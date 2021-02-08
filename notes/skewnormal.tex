@@ -1,0 +1,144 @@
+\documentclass[fleqn]{article}
+
+\usepackage[no-math]{fontspec}
+\usepackage[OT1]{eulervm}
+\usepackage{microtype,ifthen}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,braket,cancel}
+\usepackage{titlesec}
+\usepackage[usenames,dvipsnames]{xcolor}
+\usepackage[style=numeric-comp,backend=biber,doi=false,isbn=false,url=false,date=year]{biblatex}
+\usepackage{hyperref}
+
+% Fonts
+\defaultfontfeatures{%
+    RawFeature={%
+        +calt   % *Contextual alternates
+        ,+clig  % *contextual ligatures
+        ,+ccmp  % *composition & decomposition
+        ,+tlig  % 'tex-ligatures': `` '' -- --- !` ?` << >>
+        ,+cv06  % narrow guillemets
+    }%
+}
+\setmainfont{EB Garamond}
+\newfontfamily{\smallcaps}[RawFeature={+c2sc,+scmp}]{EB Garamond}
+\newfontfamily{\swash}[RawFeature={+swsh}]{EB Garamond}
+
+% Sections
+\titleformat{\section}{\normalfont \Large \scshape}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalfont \large \scshape}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalfont \scshape}{\thesubsubsection}{0.5em}{}
+\pagestyle{headings}
+\renewcommand{\thesection}{\roman{section}}
+\renewcommand{\thesubsection}{\thesection.\roman{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\roman{subsubsection}}
+
+% Theorems
+\newtheoremstyle{definition}{}{}{\itshape}{\parindent}{\scshape}{.}{1em}{\thmname{#1}\thmnumber{ #2}:}
+\newtheoremstyle{theorem}{}{}{}{\parindent}{\scshape}{}{1em}{\thmname{#1}\thmnumber{ #2}:}
+\theoremstyle{theorem}
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{corollary}[lemma]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+% Math operators
+\DeclareMathOperator*{\argmin}{argmin}
+\DeclareMathOperator*{\argmax}{argmax}
+\DeclareMathOperator{\logm}{Log}
+\newcommand{\norm}[2][]{\left\Vert#2\right\Vert_{#1}}
+\newcommand{\abs}[1]{\left\vert#1\right\vert}
+\newcommand{\SN}[2][]{\mathcal{SN}_{#1}\left(#2\right)}
+
+% Metadata
+\title{Skewnormal}
+\newcommand{\myName}{Jacopo Schiavon}
+\newcommand{\myMail}{\href{mailto:jschiavon@stat.unipd.it}{\ttfamily jschiavon@stat.unipd.it}}
+\newcommand{\myDept}{Department of Statistical Sciences, University of Padova}
+\author{\myName\thanks{\myDept. Contact: \myMail}}
+\hypersetup{pdfauthor={\myName},
+    pdfcreator={\myName},
+    breaklinks=True,
+    colorlinks=true,       	% false: boxed links; true: colored links
+    linkcolor=MidnightBlue, % color of internal links
+    citecolor=ForestGreen,	% color of links to bibliography
+    filecolor=Plum,			% color of file links
+    urlcolor=Sepia			% color of url link
+}
+
+% Bibliography
+\setlength\bibitemsep{1.5\itemsep}
+\setlength\bibhang{1.5\parindent}
+\renewcommand*{\mkbibnamefamily}[1]{\textsc{#1}}
+\renewcommand*{\mkbibnamegiven}[1]{\textsc{#1}}
+\renewcommand*{\mkbibnameprefix}[1]{\textsc{#1}}
+\renewcommand*{\mkbibnamesuffix}[1]{\textsc{#1}}
+\renewcommand*{\labelnamepunct}{\par}
+\addbibresource{biblio.bib}
+
+\setlength{\parindent}{0pt}
+
+\begin{document}
+    \maketitle
+
+    \section{Parametrization}
+    Let $y\in\mathbb{R}^d$, we say that $y\sim\SN[d]{\xi, \bar\Sigma, \delta}$ if
+    \begin{equation}\label{eq:first}
+        p(y\mid \xi, \bar\Sigma, \delta) = \int_0^\infty 2\phi_{d+1}\left(\left[y^\top, z\right]^\top\mid \mu, \Omega\right)dz
+    \end{equation}
+    with $\mu=\left[\xi^\top, 0\right]^\top$ and $\Omega=\begin{pmatrix}
+        \omega\Sigma\omega  &   \omega\delta\\
+        \delta^\top\omega   &   1
+    \end{pmatrix}$ and $\bar\Sigma = \omega\Sigma\omega$ is the decomposition of the covariance matrix in correlation matrix and the diagonal matrix with variances.
+
+    By defining $\theta= \omega\delta$ and $\Psi = \bar\Sigma - \theta\theta^\top$, we can rewrite the previous density as
+    \begin{equation}\label{eq:second}
+        p(y\mid \xi, \bar\Sigma, \delta) \propto \int_0^\infty 2\phi_1(z)\phi_d\!\left(y\mid \xi+\theta z, \Psi\right)dz.
+    \end{equation}
+    Note that $\abs{\Omega} = \abs{\omega\Sigma\omega - \omega\delta\delta^\top\omega} = \abs{\omega\left(\Sigma-\delta\delta^\top\right)\omega} = \abs{\Psi}$ and
+    \begin{equation*}
+        \Omega^{-1} = \begin{pmatrix}
+            \Psi^{-1}   &   -\Psi^{-1}\theta\\
+            - \theta^\top\Psi^{-1}  &   1 + \theta^\top\Psi^{-1}\theta
+        \end{pmatrix}
+    \end{equation*}
+
+    Moreover, by rearranging the terms from equation~\eqref{eq:second} we can write:
+    \begin{align*}
+        p(y\mid \xi, \bar\Sigma, \delta) &\propto \int_0^\infty 2\phi_1(z\mid\bar\mu,\bar\sigma^2) \phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right]dz\\
+        &= \phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right] 2 \int_{-\bar\mu/\bar\sigma}^\infty\phi_1(z)dz\\
+        &= 2\phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right]\Phi_1\!\left(\frac{\bar\mu}{\bar\sigma}\right)\\
+        &= 2\phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{1}{2}(y-\xi)^\top\alpha\alpha^\top(y-\xi)\right]\Phi_1\!\left(\alpha^\top(y-\xi)\right)\\
+        &= 2\phi_d\!\left(y\mid \xi, \Psi - \alpha\alpha^\top\right) \Phi_1\!\left(\alpha^\top(y-\xi)\right)
+    \end{align*}
+    where we have used
+    \begin{align*}
+        \bar\mu &= \frac{(y-\xi)^\top\Psi^{-1}\theta}{1 + \theta^\top\Psi^{-1}\theta}        &       \bar\sigma^2 &= \left(1 + \theta^\top\Psi^{-1}\theta\right)^{-1}
+    \end{align*}
+    and we defined
+    \begin{equation*}
+        \alpha = \frac{\Psi^{-1}\theta}{\sqrt{1 + \theta^\top\Psi^{-1}\theta}}
+    \end{equation*}
+
+    \section{Constraints}
+    In order for $\Psi$ (and thus $\Omega$) to be positive definite, a constrain should be put on $\delta$ and $\bar\Sigma$.  First of all, recall that the matrix $\theta\theta^\top$ has only one strictly positive eigenvalue, equal to $\norm{\theta}^2$, while all the others are 0. As it can be proven that $\Psi$ is SPD if and only if the smallest eigenvalue of $\bar\Sigma$ is larger than $\norm{\theta}^2$, we can require that
+    \begin{equation*}
+        \norm{\theta}^2 = \delta^\top\omega\omega\delta \leq \min_i\lambda_i(\bar\Sigma)
+    \end{equation*}
+
+
+
+    \section{Data generation mechanism}
+    To generate samples from a skewnormal we exploit equation~\eqref{eq:first} and we proceed in the following way:
+    \begin{itemize}
+        \item We compute $\mu$ and $\Omega$ from the parameters $\xi$, $\bar\Sigma$ and $\delta$
+        \item We generate a sample from a $(d+1)$-variate normal distribution: $Z \sim \mathcal{N}_{d+1}(\mu,\Omega)$
+        \item if $Z[d+1] \geq 0$ then $y = Z[:d]$, else $y = - Z[:d]$.
+    \end{itemize}
+
+
+
+    \printbibliography
+
+
+
+\end{document}

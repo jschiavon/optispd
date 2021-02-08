@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="Jacopo Schiavon" />
+  <title>Skewnormal</title>
+  <style>
+    html {
+      line-height: 1.5;
+      font-family: Georgia, serif;
+      font-size: 20px;
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      word-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 1em;
+      }
+    }
+    @media print {
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, 'Lucida Console', Consolas, monospace;
+      font-size: 85%;
+      margin: 0;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+  </style>
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Skewnormal</h1>
+<p class="author">Jacopo Schiavon<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a></p>
+</header>
+<h1 id="parametrization">Parametrization</h1>
+<p>Let <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>y</mi><mo>∈</mo><msup><mstyle mathvariant="double-struck"><mi>ℝ</mi></mstyle><mi>d</mi></msup></mrow><annotation encoding="application/x-tex">y\in\mathbb{R}^d</annotation></semantics></math>, we say that <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>y</mi><mo>∼</mo><msub><mstyle mathvariant="script"><mi>𝒮</mi><mi>𝒩</mi></mstyle><mi>d</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><mi>ξ</mi><mo>,</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>,</mo><mi>δ</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">y\sim\mathcal{SN}_{d}\left(\xi, \bar\Sigma, \delta\right)</annotation></semantics></math> if <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>,</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><msubsup><mo>∫</mo><mn>0</mn><mi>∞</mi></msubsup><mn>2</mn><msub><mi>ϕ</mi><mrow><mi>d</mi><mo>+</mo><mn>1</mn></mrow></msub><mrow><mo stretchy="true" form="prefix">(</mo><msup><mrow><mo stretchy="true" form="prefix">[</mo><msup><mi>y</mi><mi>⊤</mi></msup><mo>,</mo><mi>z</mi><mo stretchy="true" form="postfix">]</mo></mrow><mi>⊤</mi></msup><mo>∣</mo><mi>μ</mi><mo>,</mo><mi>Ω</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>d</mi><mi>z</mi></mrow><annotation encoding="application/x-tex">\label{eq:first}
+        p(y\mid \xi, \bar\Sigma, \delta) = \int_0^\infty 2\phi_{d+1}\left(\left[y^\top, z\right]^\top\mid \mu, \Omega\right)dz</annotation></semantics></math> with <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>μ</mi><mo>=</mo><msup><mrow><mo stretchy="true" form="prefix">[</mo><msup><mi>ξ</mi><mi>⊤</mi></msup><mo>,</mo><mn>0</mn><mo stretchy="true" form="postfix">]</mo></mrow><mi>⊤</mi></msup></mrow><annotation encoding="application/x-tex">\mu=\left[\xi^\top, 0\right]^\top</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Ω</mi><mo>=</mo><mrow><mo stretchy="true" form="prefix">(</mo><mtable><mtr><mtd columnalign="center"><mi>ω</mi><mi>Σ</mi><mi>ω</mi></mtd><mtd columnalign="center"><mi>ω</mi><mi>δ</mi></mtd></mtr><mtr><mtd columnalign="center"><msup><mi>δ</mi><mi>⊤</mi></msup><mi>ω</mi></mtd><mtd columnalign="center"><mn>1</mn></mtd></mtr></mtable><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">\Omega=\begin{pmatrix}
+        \omega\Sigma\omega  &amp;   \omega\delta\\
+        \delta^\top\omega   &amp;   1
+    \end{pmatrix}</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>=</mo><mi>ω</mi><mi>Σ</mi><mi>ω</mi></mrow><annotation encoding="application/x-tex">\bar\Sigma = \omega\Sigma\omega</annotation></semantics></math> is the decomposition of the covariance matrix in correlation matrix and the diagonal matrix with variances.</p>
+<p>By defining <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi><mo>=</mo><mi>ω</mi><mi>δ</mi></mrow><annotation encoding="application/x-tex">\theta= \omega\delta</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Ψ</mi><mo>=</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>−</mo><mi>θ</mi><msup><mi>θ</mi><mi>⊤</mi></msup></mrow><annotation encoding="application/x-tex">\Psi = \bar\Sigma - \theta\theta^\top</annotation></semantics></math>, we can rewrite the previous density as <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>,</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo><mo>∝</mo><msubsup><mo>∫</mo><mn>0</mn><mi>∞</mi></msubsup><mn>2</mn><msub><mi>ϕ</mi><mn>1</mn></msub><mo stretchy="false" form="prefix">(</mo><mi>z</mi><mo stretchy="false" form="postfix">)</mo><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>+</mo><mi>θ</mi><mi>z</mi><mo>,</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>d</mi><mi>z</mi><mi>.</mi></mrow><annotation encoding="application/x-tex">\label{eq:second}
+        p(y\mid \xi, \bar\Sigma, \delta) \propto \int_0^\infty 2\phi_1(z)\phi_d\!\left(y\mid \xi+\theta z, \Psi\right)dz.</annotation></semantics></math> Note that <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mo stretchy="true" form="prefix">|</mo><mi>Ω</mi><mo stretchy="true" form="postfix">|</mo></mrow><mo>=</mo><mrow><mo stretchy="true" form="prefix">|</mo><mi>ω</mi><mi>Σ</mi><mi>ω</mi><mo>−</mo><mi>ω</mi><mi>δ</mi><msup><mi>δ</mi><mi>⊤</mi></msup><mi>ω</mi><mo stretchy="true" form="postfix">|</mo></mrow><mo>=</mo><mrow><mo stretchy="true" form="prefix">|</mo><mi>ω</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>Σ</mi><mo>−</mo><mi>δ</mi><msup><mi>δ</mi><mi>⊤</mi></msup><mo stretchy="true" form="postfix">)</mo></mrow><mi>ω</mi><mo stretchy="true" form="postfix">|</mo></mrow><mo>=</mo><mrow><mo stretchy="true" form="prefix">|</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">|</mo></mrow></mrow><annotation encoding="application/x-tex">\left\vert\Omega\right\vert = \left\vert\omega\Sigma\omega - \omega\delta\delta^\top\omega\right\vert = \left\vert\omega\left(\Sigma-\delta\delta^\top\right)\omega\right\vert = \left\vert\Psi\right\vert</annotation></semantics></math> and <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>Ω</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mo>=</mo><mrow><mo stretchy="true" form="prefix">(</mo><mtable><mtr><mtd columnalign="center"><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup></mtd><mtd columnalign="center"><mo>−</mo><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mtd></mtr><mtr><mtd columnalign="center"><mo>−</mo><msup><mi>θ</mi><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup></mtd><mtd columnalign="center"><mn>1</mn><mo>+</mo><msup><mi>θ</mi><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mtd></mtr></mtable><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">\Omega^{-1} = \begin{pmatrix}
+            \Psi^{-1}   &amp;   -\Psi^{-1}\theta\\
+            - \theta^\top\Psi^{-1}  &amp;   1 + \theta^\top\Psi^{-1}\theta
+        \end{pmatrix}</annotation></semantics></math></p>
+<p>Moreover, by rearranging the terms from equation <a href="#eq:second" data-reference-type="eqref" data-reference="eq:second">[eq:second]</a> we can write: <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mtable><mtr><mtd columnalign="right"><mi>p</mi><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo>,</mo><mi>δ</mi><mo stretchy="false" form="postfix">)</mo></mtd><mtd columnalign="left"><mo>∝</mo><msubsup><mo>∫</mo><mn>0</mn><mi>∞</mi></msubsup><mn>2</mn><msub><mi>ϕ</mi><mn>1</mn></msub><mo stretchy="false" form="prefix">(</mo><mi>z</mi><mo>∣</mo><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mo>,</mo><msup><mover><mi>σ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup><mo stretchy="false" form="postfix">)</mo><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>exp</mo><mrow><mo stretchy="true" form="prefix">[</mo><mfrac><msup><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup><mrow><mn>2</mn><msup><mover><mi>σ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup></mrow></mfrac><mo stretchy="true" form="postfix">]</mo></mrow><mi>d</mi><mi>z</mi></mtd></mtr><mtr><mtd columnalign="right"></mtd><mtd columnalign="left"><mo>=</mo><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>exp</mo><mrow><mo stretchy="true" form="prefix">[</mo><mfrac><msup><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup><mrow><mn>2</mn><msup><mover><mi>σ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup></mrow></mfrac><mo stretchy="true" form="postfix">]</mo></mrow><mn>2</mn><msubsup><mo>∫</mo><mrow><mo>−</mo><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mi>/</mi><mover><mi>σ</mi><mo accent="true">‾</mo></mover></mrow><mi>∞</mi></msubsup><msub><mi>ϕ</mi><mn>1</mn></msub><mo stretchy="false" form="prefix">(</mo><mi>z</mi><mo stretchy="false" form="postfix">)</mo><mi>d</mi><mi>z</mi></mtd></mtr><mtr><mtd columnalign="right"></mtd><mtd columnalign="left"><mo>=</mo><mn>2</mn><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>exp</mo><mrow><mo stretchy="true" form="prefix">[</mo><mfrac><msup><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup><mrow><mn>2</mn><msup><mover><mi>σ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup></mrow></mfrac><mo stretchy="true" form="postfix">]</mo></mrow><msub><mi>Φ</mi><mn>1</mn></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mfrac><mover><mi>μ</mi><mo accent="true">‾</mo></mover><mover><mi>σ</mi><mo accent="true">‾</mo></mover></mfrac><mo stretchy="true" form="postfix">)</mo></mrow></mtd></mtr><mtr><mtd columnalign="right"></mtd><mtd columnalign="left"><mo>=</mo><mn>2</mn><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mi>Ψ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>exp</mo><mrow><mo stretchy="true" form="prefix">[</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>−</mo><mi>ξ</mi><msup><mo stretchy="false" form="postfix">)</mo><mi>⊤</mi></msup><mi>α</mi><msup><mi>α</mi><mi>⊤</mi></msup><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>−</mo><mi>ξ</mi><mo stretchy="false" form="postfix">)</mo><mo stretchy="true" form="postfix">]</mo></mrow><msub><mi>Φ</mi><mn>1</mn></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><msup><mi>α</mi><mi>⊤</mi></msup><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>−</mo><mi>ξ</mi><mo stretchy="false" form="postfix">)</mo><mo stretchy="true" form="postfix">)</mo></mrow></mtd></mtr><mtr><mtd columnalign="right"></mtd><mtd columnalign="left"><mo>=</mo><mn>2</mn><msub><mi>ϕ</mi><mi>d</mi></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>∣</mo><mi>ξ</mi><mo>,</mo><mi>Ψ</mi><mo>−</mo><mi>α</mi><msup><mi>α</mi><mi>⊤</mi></msup><mo stretchy="true" form="postfix">)</mo></mrow><msub><mi>Φ</mi><mn>1</mn></msub><mspace width="-0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><msup><mi>α</mi><mi>⊤</mi></msup><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>−</mo><mi>ξ</mi><mo stretchy="false" form="postfix">)</mo><mo stretchy="true" form="postfix">)</mo></mrow></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned}
+        p(y\mid \xi, \bar\Sigma, \delta) &amp;\propto \int_0^\infty 2\phi_1(z\mid\bar\mu,\bar\sigma^2) \phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right]dz\\
+        &amp;= \phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right] 2 \int_{-\bar\mu/\bar\sigma}^\infty\phi_1(z)dz\\
+        &amp;= 2\phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{\bar\mu^2}{2\bar\sigma^2}\right]\Phi_1\!\left(\frac{\bar\mu}{\bar\sigma}\right)\\
+        &amp;= 2\phi_d\!\left(y\mid \xi, \Psi\right) \exp\left[\frac{1}{2}(y-\xi)^\top\alpha\alpha^\top(y-\xi)\right]\Phi_1\!\left(\alpha^\top(y-\xi)\right)\\
+        &amp;= 2\phi_d\!\left(y\mid \xi, \Psi - \alpha\alpha^\top\right) \Phi_1\!\left(\alpha^\top(y-\xi)\right)
+    \end{aligned}</annotation></semantics></math> where we have used <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mtable><mtr><mtd columnalign="right"><mover><mi>μ</mi><mo accent="true">‾</mo></mover></mtd><mtd columnalign="left"><mo>=</mo><mfrac><mrow><mo stretchy="false" form="prefix">(</mo><mi>y</mi><mo>−</mo><mi>ξ</mi><msup><mo stretchy="false" form="postfix">)</mo><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mrow><mrow><mn>1</mn><mo>+</mo><msup><mi>θ</mi><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mrow></mfrac></mtd><mtd columnalign="right"><msup><mover><mi>σ</mi><mo accent="true">‾</mo></mover><mn>2</mn></msup></mtd><mtd columnalign="left"><mo>=</mo><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msup><mi>θ</mi><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mrow><mo>−</mo><mn>1</mn></mrow></msup></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned}
+        \bar\mu &amp;= \frac{(y-\xi)^\top\Psi^{-1}\theta}{1 + \theta^\top\Psi^{-1}\theta}        &amp;       \bar\sigma^2 &amp;= \left(1 + \theta^\top\Psi^{-1}\theta\right)^{-1}
+    \end{aligned}</annotation></semantics></math> and we defined <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>α</mi><mo>=</mo><mfrac><mrow><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mrow><msqrt><mrow><mn>1</mn><mo>+</mo><msup><mi>θ</mi><mi>⊤</mi></msup><msup><mi>Ψ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mi>θ</mi></mrow></msqrt></mfrac></mrow><annotation encoding="application/x-tex">\alpha = \frac{\Psi^{-1}\theta}{\sqrt{1 + \theta^\top\Psi^{-1}\theta}}</annotation></semantics></math></p>
+<h1 id="constraints">Constraints</h1>
+<p>In order for <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Ψ</mi><annotation encoding="application/x-tex">\Psi</annotation></semantics></math> (and thus <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Ω</mi><annotation encoding="application/x-tex">\Omega</annotation></semantics></math>) to be positive definite, a constrain should be put on <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>δ</mi><annotation encoding="application/x-tex">\delta</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><annotation encoding="application/x-tex">\bar\Sigma</annotation></semantics></math>. First of all, recall that the matrix <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi><msup><mi>θ</mi><mi>⊤</mi></msup></mrow><annotation encoding="application/x-tex">\theta\theta^\top</annotation></semantics></math> has only one strictly positive eigenvalue, equal to <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msubsup><mrow><mo stretchy="true" form="prefix">‖</mo><mi>θ</mi><mo stretchy="true" form="postfix">‖</mo></mrow><mrow></mrow><mn>2</mn></msubsup><annotation encoding="application/x-tex">\left\Vert\theta\right\Vert_{}^2</annotation></semantics></math>, while all the others are 0. As it can be proven that <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Ψ</mi><annotation encoding="application/x-tex">\Psi</annotation></semantics></math> is SPD if and only if the smallest eigenvalue of <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><annotation encoding="application/x-tex">\bar\Sigma</annotation></semantics></math> is larger than <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msubsup><mrow><mo stretchy="true" form="prefix">‖</mo><mi>θ</mi><mo stretchy="true" form="postfix">‖</mo></mrow><mrow></mrow><mn>2</mn></msubsup><annotation encoding="application/x-tex">\left\Vert\theta\right\Vert_{}^2</annotation></semantics></math>, we can require that <math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msubsup><mrow><mo stretchy="true" form="prefix">‖</mo><mi>θ</mi><mo stretchy="true" form="postfix">‖</mo></mrow><mrow></mrow><mn>2</mn></msubsup><mo>=</mo><msup><mi>δ</mi><mi>⊤</mi></msup><mi>ω</mi><mi>ω</mi><mi>δ</mi><mo>≤</mo><munder><mo>min</mo><mi>i</mi></munder><msub><mi>λ</mi><mi>i</mi></msub><mo stretchy="false" form="prefix">(</mo><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">\left\Vert\theta\right\Vert_{}^2 = \delta^\top\omega\omega\delta \leq \min_i\lambda_i(\bar\Sigma)</annotation></semantics></math></p>
+<h1 id="data-generation-mechanism">Data generation mechanism</h1>
+<p>To generate samples from a skewnormal we exploit equation <a href="#eq:first" data-reference-type="eqref" data-reference="eq:first">[eq:first]</a> and we proceed in the following way:</p>
+<ul>
+<li><p>We compute <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>μ</mi><annotation encoding="application/x-tex">\mu</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Ω</mi><annotation encoding="application/x-tex">\Omega</annotation></semantics></math> from the parameters <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>ξ</mi><annotation encoding="application/x-tex">\xi</annotation></semantics></math>, <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mover><mi>Σ</mi><mo accent="true">‾</mo></mover><annotation encoding="application/x-tex">\bar\Sigma</annotation></semantics></math> and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>δ</mi><annotation encoding="application/x-tex">\delta</annotation></semantics></math></p></li>
+<li><p>We generate a sample from a <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">(d+1)</annotation></semantics></math>-variate normal distribution: <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Z</mi><mo>∼</mo><msub><mstyle mathvariant="script"><mi>𝒩</mi></mstyle><mrow><mi>d</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false" form="prefix">(</mo><mi>μ</mi><mo>,</mo><mi>Ω</mi><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">Z \sim \mathcal{N}_{d+1}(\mu,\Omega)</annotation></semantics></math></p></li>
+<li><p>if <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Z</mi><mo stretchy="false" form="prefix">[</mo><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false" form="postfix">]</mo><mo>≥</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">Z[d+1] \geq 0</annotation></semantics></math> then <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>y</mi><mo>=</mo><mi>Z</mi><mo stretchy="false" form="prefix">[</mo><mo>:</mo><mi>d</mi><mo stretchy="false" form="postfix">]</mo></mrow><annotation encoding="application/x-tex">y = Z[:d]</annotation></semantics></math>, else <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>y</mi><mo>=</mo><mo>−</mo><mi>Z</mi><mo stretchy="false" form="prefix">[</mo><mo>:</mo><mi>d</mi><mo stretchy="false" form="postfix">]</mo></mrow><annotation encoding="application/x-tex">y = - Z[:d]</annotation></semantics></math>.</p></li>
+</ul>
+<section class="footnotes" role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1" role="doc-endnote"><p>Department of Statistical Sciences, University of Padova. Contact: <a href="mailto:jschiavon@stat.unipd.it">jschiavon@stat.unipd.it</a><a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+</body>
+</html>

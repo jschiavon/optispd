@@ -1,7 +1,20 @@
+# Auxiliary folders
 .ipynb_checkpoints/
 __pycache__/
 .vscode/
 .ropeproject/
+*.egg-info/
 
-
+# File formats
 *.csv
+*.python-version
+
+# LaTeX auxiliary
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.log
+*.out
+*.run.xml
+*.synctex.gz
