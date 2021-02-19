@@ -1,9 +1,13 @@
 # Auxiliary folders
 .ipynb_checkpoints/
-__pycache__/
 .vscode/
 .ropeproject/
-*.egg-info/
+
+# Packaging stuff
+*.pyc
+/dist/
+/*.egg-info
+build/
 
 # File formats
 *.csv

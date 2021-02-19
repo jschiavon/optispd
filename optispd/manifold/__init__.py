@@ -21,6 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from optispd._src.euclidean import Euclidean
-from optispd._src.product import Product
-from optispd._src.spd import SPD
+from .euclidean import Euclidean
+from .product import Product
+from .spd import SPD

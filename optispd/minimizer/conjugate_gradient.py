@@ -132,7 +132,6 @@ class OptimizerResult(NamedTuple):
 
     def pprint(self):
         """Print a concise summary of the result."""
-        succeded = self.success
         message = "Optimization {}completed.".format("" if self.success else "not ")
         details = "{} iterations in {:.3f} s".format(self.nit, self.time)
         print(message + "\n\t" + details)
@@ -413,9 +412,6 @@ class RCG():
                 )
 
         while True:
-            if k == 1:
-                first_iter_time = time.time() - t_start
-
             df0 = self.man.inner(x, gr, d)
 
             if df0 >= 0:
@@ -445,13 +441,6 @@ class RCG():
                 break
 
             if status >= 0:
-                if self._parms.verbosity >= 1:
-                    print(
-                        'Optimization completed in {} s with status {}'.format(
-                            time.time() - t_start,
-                            status
-                            )
-                        )
                 break
 
             def cost_and_grad(t):
@@ -514,10 +503,12 @@ class RCG():
             time=(time.time() - t_start)
             )
 
+        if self._parms.verbosity >= 1:
+            result.pprint()
+        
         if self._parms.logverbosity:
             return result, logs
-        else:
-            return result
+        return result
 
 
 """

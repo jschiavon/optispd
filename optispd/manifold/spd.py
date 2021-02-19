@@ -30,12 +30,15 @@ def _logm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, jnp.log(w), v)
 
-
 @jit
 def _sqrtm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, jnp.sqrt(w), v)
 
+@jit
+def _isqrtm(X):
+    w, v = jnp.linalg.eigh(X)
+    return jnp.einsum('...ij,...j,...lj', v, 1. / jnp.sqrt(w), v)
 
 @jit
 def _expm(X):
@@ -91,9 +94,9 @@ class SPD():
     @partial(jit, static_argnums=(0))
     def norm(self, X, W):
         """Compute norm of tangent vector `W` in tangent space at `X`."""
-        iC = jnp.linalg.inv(jnp.linalg.cholesky(X))
-        mid = jnp.einsum('...ij,...jk,...lk', iC, W, iC)
-        nrm = jnp.linalg.norm(mid)
+        iX = _isqrtm(X)
+        mid = jnp.einsum('...ij,...jk,...lk', iX, W, iX)
+        nrm = jnp.linalg.norm(mid, axis=(-2, -1))
         if self._m > 1:
             return jnp.sqrt(jnp.sum(nrm * nrm))
         return nrm
@@ -120,8 +123,8 @@ class SPD():
     @partial(jit, static_argnums=(0))
     def dist(self, X, Y):
         """Return geodesic distance between `X` and `Y`."""
-        iC = jnp.linalg.inv(jnp.linalg.cholesky(X))
-        mid = jnp.einsum('...ij,...jk,...lk', iC, Y, iC)
+        iX = _isqrtm(X)
+        mid = jnp.einsum('...ij,...jk,...lk', iX, Y, iX)
         d = jnp.linalg.norm(_logm(mid))
         if self._m > 1:
             return jnp.sqrt(jnp.sum(d * d))
@@ -145,7 +148,9 @@ class SPD():
     @partial(jit, static_argnums=(0))
     def exp(self, X, U):
         """Compute the exponential map of tangent vector `U` at `X`."""
-        return jnp.matmul(X, _expm(jnp.linalg.solve(X, U)))
+        iX = _isqrtm(X)
+        mid = jnp.einsum('...ij,...jk,...lk', iX, U, iX)        
+        return jnp.matmul(X, _expm(mid))
 
     @partial(jit, static_argnums=(0))
     def secondorder_exp(self, X, U):
@@ -167,10 +172,11 @@ class SPD():
 
         This is the inverse of the exponential map `exp`.
         """
-        C = jnp.linalg.cholesky(X)
-        iC = jnp.linalg.inv(C)
-        mid = jnp.einsum('...ij,...jk,...lk', iC, Y, iC)
-        return jnp.einsum('...ij,...jk,...lk', C, _logm(mid), C)
+        w, v = jnp.linalg.eigh(X)
+        Xhalf = jnp.einsum('...ij,...j,...lj', v, jnp.sqrt(w), v)
+        iXhalf = jnp.einsum('...ij,...j,...lj', v, 1 / jnp.sqrt(w), v)
+        mid = jnp.einsum('...ij,...jk,...lk', iXhalf, Y, iXhalf)
+        return jnp.einsum('...ij,...jk,...lk', Xhalf, _logm(mid), Xhalf)
 
     @partial(jit, static_argnums=(0))
     def parallel_transport(self, X, Y, U):
@@ -180,7 +186,8 @@ class SPD():
         This transport parallely vector `U` in the tangent space at `X`
         to its corresponding vector in the tangent space at `Y`.
         """
-        E = _sqrtm(jnp.matmul(Y, jnp.linalg.inv(X)))
+        iX = _isqrtm(X)
+        E = _sqrtm(jnp.einsum('...ij,...jk,...lk', iX, Y, iX))
         return jnp.einsum('...ij,...jk,...lk', E, U, E)
 
     @partial(jit, static_argnums=(0))

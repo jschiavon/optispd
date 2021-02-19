@@ -129,7 +129,6 @@ class OptimizerResult(NamedTuple):
 
     def pprint(self):
         """Print a concise summary of the result."""
-        succeded = self.success
         message = "Optimization {}completed.".format("" if self.success else "not ")
         details = "{} iterations in {:.3f} s".format(self.nit, self.time)
         print(message + "\n\t" + details)
@@ -175,14 +174,11 @@ class RSD():
     """Algorithm to perform riemannian steepest descent."""
 
     Algo = 'Riemannian Steepest Descent'
-    ShortName = 'R-SD'
+    ShortAlgo = 'R-SD'
 
     def __init__(self, manifold, **pars):
         """
-        Conjugate Gradient optimizer.
-
-        The available methods for the computations of Beta are available
-        through the attribute `BetaAvailable`.
+        Riemannian Steepest Descent.
 
         Mandatory arguments:
             - manifold
@@ -238,8 +234,7 @@ class RSD():
         """Representat the optimizer as a string."""
         return self.__name__
 
-    def _check_stopping_criterion(self, time0, iters=-1, grnorm=float('inf'),
-                                  stepsize=float('inf'), costevals=-1):
+    def _check_stopping_criterion(self, time0, iters=-1, grnorm=float('inf'), stepsize=float('inf'), costevals=-1):
         status = - 1
         if grnorm <= self._parms.mingradnorm:
             status = 0
@@ -329,9 +324,6 @@ class RSD():
                 )
 
         while True:
-            if k == 1:
-                first_iter_time = time.time() - t_start
-
             if self._parms.verbosity >= 2:
                 print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
@@ -345,13 +337,6 @@ class RSD():
                 self._costev
                 )
             if status >= 0:
-                if self._parms.verbosity >= 1:
-                    print(
-                        'Optimization completed in {} s with status {}'.format(
-                            time.time() - t_start,
-                            status
-                            )
-                        )
                 break
 
             def cost_and_grad(t):
@@ -404,11 +389,13 @@ class RSD():
                 stepsize=stepsize,
                 time=(time.time() - t_start)
                 )
-
+        
+        if self._parms.verbosity >= 1:
+            result.pprint()
+        
         if self._parms.logverbosity:
             return result, logs
-        else:
-            return result
+        return result
 
 
 """

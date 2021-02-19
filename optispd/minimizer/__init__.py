@@ -21,14 +21,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+
 def minimizer(man, method='rsd', **pars):
     """Thin wrapper for optimization algorithms on manifold."""
     if method == 'rsd':
-        from optispd._src.steepest_descent import RSD as _rsd
+        from .steepest_descent import RSD as _rsd
         return _rsd(man, **pars)
     elif method == 'rcg':
-        from optispd._src.conjugate_gradient import RCG as _rcg
+        from .conjugate_gradient import RCG as _rcg
         return _rcg(man, **pars)
+    # elif method == 'rlbfgs':
+    #     from .l_bfgs import RL_BFGS as _rlbfgs
+    #     return _rlbfgs(man, **pars)
     else:
         raise NotImplementedError("The selected method is not available yet. "
                                   "Please use one of `rsd` or `rcg`")
