@@ -2,8 +2,15 @@ import jax.numpy as jnp
 from jax import jit, grad, jvp, random
 from jax.scipy.stats import multivariate_normal as mvn
 from jax.scipy.stats import norm
+from time import time
 
-from scipy.optimize import minimize, NonlinearConstraint
+from scipy.optimize import minimize
+
+from itertools import product
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_theme("talk", "darkgrid")
 
 from jax.config import config
 config.update('jax_enable_x64', True)
@@ -15,78 +22,89 @@ from optispd.minimizer import minimizer
 
 n = 1000
 p = 2
-tol = 1e-6
+tol = 1e-4
 seed = 42
 rng = random.PRNGKey(seed)
 
-rng, *key = random.split(rng, 6)
+rng, *key = random.split(rng, 4)
 # mean = random.normal(key[0], shape=(p,))
 mean = jnp.zeros(shape=(p,))
-cov = jnp.linalg.qr(random.normal(key[1], shape=(p, p)))[0]
-coveigs = random.uniform(key[2], shape=(p,), minval=2, maxval=20)
-cov = jnp.einsum('ij,j,kj->ik', cov, coveigs, cov)
-theta = random.uniform(key[3], shape=(p,))
-thetanorm = random.uniform(key[4], maxval=min(coveigs))
-theta = theta / (jnp.linalg.norm(theta) / thetanorm)
-skew = jnp.einsum('i,i->i', 1./jnp.sqrt(jnp.diag(cov)), theta)
+cov = random.normal(key[1], shape=(p, p))
+cov = jnp.matmul(cov, cov.T)
+slant = random.uniform(key[2], shape=(p,), maxval=10)
 
-sn = SkewNormal(mean=mean, cov=cov, skew=skew)
+sn = SkewNormal(loc=mean, cov=cov, sl=slant)
 
 rng, key = random.split(rng)
 data = sn.sample(key, shape=(n,))
-data = data - jnp.mean(data, axis=0)
-
 
 @jit
-def loglik(Sigma, theta):
+def loglik(sigma, theta):
     """Compute the loglikelihood for the skewnormal."""
-    Psi = Sigma - jnp.outer(theta, theta)
-    psitheta = jnp.linalg.solve(Psi, theta)
-    alpha = psitheta / jnp.sqrt(1 + jnp.matmul(theta.T, psitheta))
-    capital_phi = jnp.sum(norm.logcdf(jnp.matmul(alpha, data.T)))
+    sc = jnp.sqrt(jnp.diag(sigma))
+    al = jnp.einsum('i,i->i', 1/sc, theta)
+    capital_phi = jnp.sum(norm.logcdf(jnp.matmul(al, data.T)))
     small_phi = jnp.sum(
         mvn.logpdf(
             data,
             mean=jnp.zeros(p),
-            cov=Psi - jnp.outer(alpha, alpha))
-        )
+            cov=sigma
+        ))
     return - (2 + small_phi + capital_phi)
-    
+
+
+def pdf(y, sigma, theta):
+    """Compute the pdf for the skewnormal."""
+    sc = jnp.sqrt(jnp.diag(sigma))
+    al = jnp.einsum('i,i->i', 1/sc, theta)
+    capital_phi = norm.logcdf(jnp.matmul(al, y.T))
+    small_phi = mvn.logpdf(
+            y,
+            mean=jnp.zeros(p),
+            cov=sigma
+        )
+    return jnp.exp(2 + small_phi + capital_phi)
+
+
+true_loglik = loglik(sn.cov, sn.slant)
 
 print("True values:")
-print("\tSigma: {}".format(sn.cov.ravel()))
+print("\tCov: {}".format(sn.cov.ravel()))
 print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sn.cov)))
-print("\tTheta: {} (norm: {})".format(sn.theta, jnp.linalg.norm(sn.theta)))
-print("\tLoglik: {:.2f} (check: {:.2f})".format(loglik(sn.cov, sn.theta), sn.logpdf(data)))
+print("\tSlant: {} (norm: {})".format(sn.slant, jnp.linalg.norm(sn.slant)))
+print("\tLoglik: {:.2f} (check: {:.2f})".format(true_loglik, jnp.sum(sn.logpdf(data))))
 
 man = SPD(p=p)
 
 optimizer = minimizer(
     man, method='rsd',
-    maxiter=1, mingradnorm=tol,
+    # maxiter=1, 
+    mingradnorm=tol,
     verbosity=0, logverbosity=False
     )
 
 k = 0
 maxit = 100
 
-rng, *key = random.split(rng, 4)
-sig = man.rand(key[0])
-limtheta = min(jnp.linalg.eigvalsh(sig))
-theta = random.uniform(key[1], shape=(p,))
-th_norm = random.uniform(key[2], maxval=limtheta)
-theta = theta / (jnp.linalg.norm(theta) / th_norm)
+rng, *key = random.split(rng, 5)
+sig = random.normal(key[0], shape=(p,p))
+sig = jnp.matmul(sig, sig.T)
 
-logl = [loglik(sig, theta)]
+th = random.uniform(key[1], shape=(p,), maxval=10)
+
+logl = [loglik(sig, th)]
+print(logl)
+
+tic = time()
 
 while True:
     print("Iteration {} starts from:".format(k))
     print("\tSigma : {}".format(sig.ravel()))
     print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sig)))
-    print("\tTheta: {} (norm: {})".format(theta, jnp.linalg.norm(theta)))
+    print("\tTheta: {} (norm: {})".format(th, jnp.linalg.norm(th)))
     print("\tLoglik : {:.2f}".format(logl[-1]))
 
-    loglik_sig = jit(lambda x: loglik(x, theta))
+    loglik_sig = jit(lambda x: loglik(x, th))
     gradient_sig = jit(grad(loglik_sig))
 
     res = optimizer.solve(loglik_sig, gradient_sig, x=sig)
@@ -98,39 +116,21 @@ while True:
     loglik_th = jit(lambda x: loglik(sig, x))
     gradient_psi = jit(grad(loglik_th))
 
-    constrain = jnp.min(jnp.linalg.eigvalsh(sig))
-    const_fun = jit(lambda x: jnp.linalg.norm(x) ** 2)
-    jac = jit(grad(const_fun))
-    # hess = jit(lambda x, v: jvp(grad(const_th), (x,), (v,)))
-    
-    if const_fun(theta) > constrain:
-        print('{} > {}, rescaling theta'.format(const_fun(theta), constrain))
-        rng, key = random.split(rng)
-        th_norm = random.uniform(key, maxval=limtheta)
-        theta = theta / (jnp.linalg.norm(theta) / th_norm)
-
-    norm_constr = NonlinearConstraint(const_fun,
-                                      0, constrain,
-                                      jac=jac,
-                                    #   hess=hess
-                                      )
-    # print('{} < {}'.format(const_th(theta), jnp.min(jnp.linalg.eigvalsh(sig))))
-    res = minimize(loglik_th, theta,
-                   method="slsqp",
+    res = minimize(loglik_th, th,
+                   method="cg",
                    jac=gradient_psi,
-                   constraints=norm_constr,
                    tol=tol,
-                   options={'maxiter':5}
+                   # options={'maxiter':5}
                    )
-    theta = res.x
+    th = res.x
 
-    logl.append(loglik(sig, theta))
+    logl.append(loglik(sig, th))
     k += 1
 
     print("And ends at:")
     print("\tSigma : {}".format(sig.ravel()))
     print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sig)))
-    print("\tTheta: {} (norm: {})".format(theta, jnp.linalg.norm(theta)))
+    print("\tTheta: {} (norm: {})".format(th, jnp.linalg.norm(th)))
     print("\tLoglik : {:.2f}".format(logl[-1]))
 
     if jnp.isclose(logl[-2], logl[-1], rtol=tol) or k == maxit:
@@ -142,10 +142,24 @@ while True:
     
     print("\n---\n")
 
-    
-import matplotlib.pyplot as plt
+toc = time()
 
-plt.plot(logl)
+print("Optimization completed in {:.2f} s".format(toc - tic))
+
+plt.plot(jnp.array(logl), label="Estimated loglikelihood")
+plt.hlines(y=true_loglik, xmin=0, xmax=k, colors='k', linestyles='--', label="Loglikelihood of true values")
+plt.yscale('log')
+plt.legend(loc='best')
 plt.show()
 
+l = 100
+x = jnp.linspace(jnp.min(data[:, 0]), jnp.max(data[:, 0]), l)
+y = jnp.linspace(jnp.min(data[:, 1]), jnp.max(data[:, 1]), l)
+xy = jnp.array(list(product(x, y)))
+Z_est = pdf(xy, sig, th).reshape(l, l).T
+Z_tru = pdf(xy, cov, slant).reshape(l, l).T
 
+g = sns.jointplot(data=pd.DataFrame(data=data, columns=['x','y']), x='x', y='y', alpha=0.4)
+g.ax_joint.contour(x, y, Z_tru, colors='k', alpha=0.7, levels=5, linestyles='dashed')
+g.ax_joint.contour(x, y, Z_est, colors='r', levels=5)
+plt.show()
