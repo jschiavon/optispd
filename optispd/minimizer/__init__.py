@@ -30,9 +30,9 @@ def minimizer(man, method='rsd', **pars):
     elif method == 'rcg':
         from .conjugate_gradient import RCG as _rcg
         return _rcg(man, **pars)
-    # elif method == 'rlbfgs':
-    #     from .l_bfgs import RL_BFGS as _rlbfgs
-    #     return _rlbfgs(man, **pars)
+    elif method == 'rlbfgs':
+        from .l_bfgs import RL_BFGS as _rlbfgs
+        return _rlbfgs(man, **pars)
     else:
         raise NotImplementedError("The selected method is not available yet. "
                                   "Please use one of `rsd` or `rcg`")

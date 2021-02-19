@@ -49,33 +49,36 @@ RNG = random.PRNGKey(seed)
 sims_dir = "simulations"
 os.makedirs(sims_dir, exist_ok=True)
 
-
-n_tests = 50
-ps = [5, 10, 25, 50, 75, 100]
+n_tests = 20
+ps = [5, 10, 25, 50, 100]
 
 N = 1000
 tol = 1e-4
 maxiter = 100
 logs = False
+chol = False
 
-res_rcg = jnp.zeros(shape=(n_tests * len(ps), 7))
-res_rsd = jnp.zeros(shape=(n_tests * len(ps), 7))
-res_cho = jnp.zeros(shape=(n_tests * len(ps), 7))
-run = 0
 
 for p in ps:
+    res = jnp.zeros(shape=(3, n_tests, 7))
+    if chol:
+        res_cho = jnp.zeros(shape=(n_tests, 7))
+
     orig_man = Product([SPD(p), Euclidean(p)])
     man = SPD(p + 1)
     print(orig_man)
 
-    optim_rcg = OPTIM(man, method='rcg', bethamethod='hybridhsdy',
+    for run in trange(n_tests):
+        optim_rcg = minimizer(man, method='rcg', bethamethod='hybridhsdy',
                       maxiter=maxiter, mingradnorm=tol,
                       verbosity=0, logverbosity=logs)
-    optim_rsd = OPTIM(man, method='rsd',
-                          maxiter=maxiter, mingradnorm=tol,
-                          verbosity=0, logverbosity=logs)
+        optim_rsd = minimizer(man, method='rsd',
+                            maxiter=maxiter, mingradnorm=tol,
+                            verbosity=0, logverbosity=logs)
+        optim_rlbfgs = minimizer(man, method='rlbfgs',
+                            maxiter=maxiter, mingradnorm=tol,
+                            verbosity=0, logverbosity=logs)
 
-    for _ in trange(n_tests):
         RNG, key = random.split(RNG)
         t_cov, t_mu = orig_man.rand(key)
         RNG, key = random.split(RNG)
@@ -86,31 +89,33 @@ for p in ps:
         MLE_rep = jnp.append(jnp.append(s_cov + jnp.outer(s_mu, s_mu),
                                         jnp.array([s_mu]), axis=0),
                              jnp.array([jnp.append(s_mu, 1)]).T, axis=1)
-        MLE_chol = jnp.linalg.cholesky(MLE_rep)
-        MLE_chol = MLE_chol.T[~(MLE_chol.T == 0.)].ravel()
+        if chol:
+            MLE_chol = jnp.linalg.cholesky(MLE_rep)
+            MLE_chol = MLE_chol.T[~(MLE_chol.T == 0.)].ravel()
 
         def nloglik(X):
             y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
             datapart = jnp.trace(jnp.linalg.solve(X, jnp.matmul(y, y.T)))
             return 0.5 * (N * jnp.linalg.slogdet(X)[1] + datapart)
 
-        def nloglik_chol(X):
-            cov = index_update(
-                jnp.zeros(shape=(p+1, p+1)),
-                jnp.triu_indices(p+1),
-                X).T
-            logdet = 2 + jnp.sum(jnp.diag(cov))
-            y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
-            sol = jnp.linalg.solve(cov, y)
-            return 0.5 * (N * logdet + jnp.einsum('ij,ij', sol, sol))
+        if chol:
+            def nloglik_chol(X):
+                cov = index_update(
+                    jnp.zeros(shape=(p+1, p+1)),
+                    jnp.triu_indices(p+1),
+                    X).T
+                logdet = 2 + jnp.sum(jnp.diag(cov))
+                y = jnp.concatenate([data.T, jnp.ones(shape=(1, N))], axis=0)
+                sol = jnp.linalg.solve(cov, y)
+                return 0.5 * (N * logdet + jnp.einsum('ij,ij', sol, sol))
 
-        fun_chol = jit(nloglik_chol)
-        gra_chol = jit(grad(fun_chol))
+            fun_chol = jit(nloglik_chol)
+            gra_chol = jit(grad(fun_chol))
 
-        true_fun_chol = fun_chol(MLE_chol)
-        true_gra_chol = gra_chol(MLE_chol)
-        # print('Cholesky function on MLE: ', true_fun_chol)
-        # print('Gradient norm of cholesky function on MLE: ', jnp.linalg.norm(true_gra_chol))
+            true_fun_chol = fun_chol(MLE_chol)
+            true_gra_chol = gra_chol(MLE_chol)
+            # print('Cholesky function on MLE: ', true_fun_chol)
+            # print('Gradient norm of cholesky function on MLE: ', jnp.linalg.norm(true_gra_chol))
 
         fun_rep = jit(nloglik)
         gra_rep = jit(grad(fun_rep))
@@ -122,66 +127,54 @@ for p in ps:
         # print('Gradient norm of reparametrized function on MLE: ', true_grnorm_rep)
 
         init_rep = jnp.identity(p + 1)
-        init_chol = jnp.ones_like(MLE_chol)
+        if chol:
+            init_chol = jnp.ones_like(MLE_chol)
 
-        result_rcg = optim_rcg.solve(fun_rep, gra_rep, x=init_rep)
-        res_rcg = index_update(res_rcg, index[run, 0], p)
-        res_rcg = index_update(res_rcg, index[run, 1], result_rcg.time)
-        res_rcg = index_update(res_rcg, index[run, 2], result_rcg.nit)
-        res_rcg = index_update(res_rcg, index[run, 3],
-                               result_rcg.fun - true_fun_rep)
-        res_rcg = index_update(res_rcg, index[run, 4],
-                               man.dist(result_rcg.x, MLE_rep))
-        res_rcg = index_update(res_rcg, index[run, 5], result_rcg.grnorm)
-        res_rcg = index_update(res_rcg, index[run, 6], 0.)
-        # result_rcg.pprint()
+        for i, opt in enumerate([optim_rcg, optim_rsd, optim_rlbfgs]):
+            result = opt.solve(fun_rep, gra_rep, x=init_rep)
+            res = index_update(res, index[i, run, 0], p)
+            res = index_update(res, index[i, run, 1], result.time)
+            res = index_update(res, index[i, run, 2], result.nit)
+            res = index_update(res, index[i, run, 3], result.fun - true_fun_rep)
+            res = index_update(res, index[i, run, 4], man.dist(result.x, MLE_rep))
+            res = index_update(res, index[i, run, 5], result.grnorm)
+            res = index_update(res, index[i, run, 6], i)
 
-        result_rsd = optim_rsd.solve(fun_rep, gra_rep, x=init_rep)
-        res_rsd = index_update(res_rsd, index[run, 0], p)
-        res_rsd = index_update(res_rsd, index[run, 1], result_rsd.time)
-        res_rsd = index_update(res_rsd, index[run, 2], result_rsd.nit)
-        res_rsd = index_update(res_rsd, index[run, 3],
-                               result_rsd.fun - true_fun_rep)
-        res_rsd = index_update(res_rsd, index[run, 4],
-                               man.dist(result_rsd.x, MLE_rep))
-        res_rsd = index_update(res_rsd, index[run, 5], result_rsd.grnorm)
-        res_rsd = index_update(res_rsd, index[run, 6], 1)
-        # result_rsd.pprint()
-
-        start = time()
-        res = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, tol=tol)
-        # print("{} {} iterations in {:.2f} s".format(res['message'], res['nit'], time() - start))
-        cov = index_update(
-            jnp.zeros(shape=(p+1, p+1)),
-            jnp.triu_indices(p+1),
-            res.x).T
-        res_cho = index_update(res_cho, index[run, 0], p)
-        res_cho = index_update(res_cho, index[run, 1], time() - start)
-        res_cho = index_update(res_cho, index[run, 2], res['nit'])
-        res_cho = index_update(res_cho, index[run, 3],
-                               res['fun'] - true_fun_chol)
-        res_cho = index_update(res_cho, index[run, 4],
-                               man.dist(cov @ cov.T, MLE_rep))
-        res_cho = index_update(res_cho, index[run, 5], jnp.linalg.norm(res.jac))
-        res_cho = index_update(res_cho, index[run, 6], 2)
-
-        run += 1
+        if chol:
+            start = time()
+            result = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, tol=tol)
+            # print("{} {} iterations in {:.2f} s".format(res['message'], res['nit'], time() - start))
+            cov = index_update(
+                jnp.zeros(shape=(p+1, p+1)),
+                jnp.triu_indices(p+1),
+                result.x).T
+            res_cho = index_update(res_cho, index[run, 0], p)
+            res_cho = index_update(res_cho, index[run, 1], time() - start)
+            res_cho = index_update(res_cho, index[run, 2], result['nit'])
+            res_cho = index_update(res_cho, index[run, 3], result['fun'] - true_fun_chol)
+            res_cho = index_update(res_cho, index[run, 4], man.dist(cov @ cov.T, MLE_rep))
+            res_cho = index_update(res_cho, index[run, 5], jnp.linalg.norm(result.jac))
+            res_cho = index_update(res_cho, index[run, 6], 3)
 
     columns = ['Matrix dimension',
         'Time', 'Iterations', 'Function difference',
         'Matrix distance', 'Gradient norm', 'Algorithm']
 
-    df1 = pd.DataFrame(res_rcg, columns=columns)
-    df2 = pd.DataFrame(res_rsd, columns=columns)
-    df3 = pd.DataFrame(res_cho, columns=columns)
+    df = [pd.DataFrame(res[0], columns=columns), 
+          pd.DataFrame(res[1], columns=columns),
+          pd.DataFrame(res[2], columns=columns)]
+    if chol:
+        df.append(pd.DataFrame(res_cho, columns=columns))
 
-    df = pd.concat([df1, df2, df3])
+    df = pd.concat(df)
 
-    algo = {'0': 'R-CG', '1': 'R-SD', '2': 'Cholesky'}
+    algo = {'0': 'R-CG', '1': 'R-SD', '2': 'R-LBFGS', '3': 'Cholesky'}
 
-    df['Algorithm'] = df['Algorithm'].apply(lambda x: algo[str(x)])
+    df['Algorithm'] = df['Algorithm'].astype(int).apply(lambda x: algo[str(x)])
 
-    df.to_csv(os.path.join(sims_dir, "mvn_{}.csv".format(p)), index=False)
+    df.to_csv(os.path.join(sims_dir, "mvn_{}_short.csv".format(p)), index=False)
+
+    del df, result
 # if logs:
 #     f, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(14, 21))
 #
