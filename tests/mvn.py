@@ -70,14 +70,14 @@ for p in ps:
 
     for run in trange(n_tests):
         optim_rcg = minimizer(man, method='rcg', bethamethod='hybridhsdy',
-                      maxiter=maxiter, mingradnorm=tol,
-                      verbosity=0, logverbosity=logs)
+                              maxiter=maxiter, mingradnorm=tol,
+                              verbosity=0, logverbosity=logs)
         optim_rsd = minimizer(man, method='rsd',
-                            maxiter=maxiter, mingradnorm=tol,
-                            verbosity=0, logverbosity=logs)
+                              maxiter=maxiter, mingradnorm=tol,
+                              verbosity=0, logverbosity=logs)
         optim_rlbfgs = minimizer(man, method='rlbfgs',
-                            maxiter=maxiter, mingradnorm=tol,
-                            verbosity=0, logverbosity=logs)
+                                 maxiter=maxiter, mingradnorm=tol,
+                                 verbosity=0, logverbosity=logs)
 
         RNG, key = random.split(RNG)
         t_cov, t_mu = orig_man.rand(key)
@@ -157,8 +157,8 @@ for p in ps:
             res_cho = index_update(res_cho, index[run, 6], 3)
 
     columns = ['Matrix dimension',
-        'Time', 'Iterations', 'Function difference',
-        'Matrix distance', 'Gradient norm', 'Algorithm']
+               'Time', 'Iterations', 'Function difference',
+               'Matrix distance', 'Gradient norm', 'Algorithm']
 
     df = [pd.DataFrame(res[0], columns=columns), 
           pd.DataFrame(res[1], columns=columns),
