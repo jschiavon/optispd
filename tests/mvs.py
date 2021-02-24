@@ -174,11 +174,11 @@ rng = random.PRNGKey(seed)
 
 dists = []
 
-for p in [2, 3, 4, 5]:
+for p in [2, 3, 4, 5, 10]:
     man = SPD(p=p)
     man_norm = SPD(p=p+1)
 
-    for it in range(10):
+    for it in range(20):
         rng, *key = random.split(rng, 4)
         # mean = random.normal(key[0], shape=(p,))
         mean = jnp.zeros(shape=(p,))
@@ -283,9 +283,9 @@ for p in [2, 3, 4, 5]:
         cov_dist = man.dist(sig, cov)
         slant_dist = jnp.linalg.norm(th - slant)
         kl_skew = J_divergence((jnp.zeros(p), sig, th), (mean, cov, slant), p)
-        print(kl_skew)
+        # print(kl_skew)
         kl_norm = J_divergence((muhat, covhat, jnp.zeros((p))), (mean, cov, slant), p)
-        print(kl_norm)
+        # print(kl_norm)
 
         dists.append([p, toc-tic, k,
                       - true_loglik, - logl[-1], - res.fun,
