@@ -70,7 +70,7 @@ for p in ps:
 
     for run in trange(n_tests):
         optim_rcg = minimizer(man, method='rcg', bethamethod='hybridhsdy',
-                              maxiter=maxiter, mingradnorm=tol,
+                              maxiter=maxiter, tol=tol,
                               verbosity=0, logverbosity=logs)
         optim_rsd = minimizer(man, method='rsd',
                               maxiter=maxiter, mingradnorm=tol,
