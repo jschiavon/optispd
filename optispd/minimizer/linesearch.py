@@ -326,14 +326,15 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, ls_pars):
             saddle_point=saddle_point
             )
 
-        if ls_pars.ls_verbosity >= 2:
-            print('\titer: {}\n\t\talpha: {:.2f}'.format(state.i, ai))
-
         fi, gri, dfi = cost_and_grad(ai)
         state = state._replace(
             nfev=state.nfev + 1,
             ngev=state.ngev + 1
             )
+
+        if ls_pars.ls_verbosity >= 2:
+            print("\titer: {}\n\t\talpha: {:.2f} "
+                  "f(alpha): {:.2f}".format(state.i, ai, fi))
 
         if wolfe_one(ai, fi) or ((fi > state.fi) and state.i > 1):
             if ls_pars.ls_verbosity >= 2:

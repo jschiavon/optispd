@@ -36,3 +36,6 @@ def minimizer(man, method='rsd', **pars):
     else:
         raise NotImplementedError("The selected method is not available yet. "
                                   "Please use one of `rsd` or `rcg`")
+
+
+from .linesearch import wolfe_linesearch, LineSearchParameter
