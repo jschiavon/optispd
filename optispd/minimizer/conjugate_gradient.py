@@ -36,8 +36,8 @@ class OptimizerParams(NamedTuple):
             maximum run time
         - maxiter (int, default 100)
             maximum number of iterations
-        - mingradnorm  (float, default 1e-8)
-            minimum gradient norm
+        - tol  (float, default 1e-6)
+            minimum gradient norm and relative function variation
         - minstepsize  (float, default 1e-16)
             minimum length of the stepsize
         - maxcostevals (int, default 5000)
@@ -54,7 +54,7 @@ class OptimizerParams(NamedTuple):
 
     maxtime: Union[float, jnp.ndarray] = 100
     maxiter: Union[int, jnp.ndarray] = 500
-    mingradnorm: Union[float, jnp.ndarray] = 1e-6
+    tol: Union[float, jnp.ndarray] = 1e-6
     minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
     betamethod: str = "hestenesstiefel"
@@ -132,9 +132,9 @@ class OptimizerResult(NamedTuple):
 
     def pprint(self):
         """Print a concise summary of the result."""
-        message = "Optimization {}completed.".format("" if self.success else "not ")
+        message = "Optimization {}completed (status {}).".format("" if self.success else "not ", self.status)
         details = "{} iterations in {:.3f} s".format(self.nit, self.time)
-        print(message + "\n\t" + details)
+        print(message + "\t" + details)
 
 
 class OptimizerLog(NamedTuple):
@@ -317,21 +317,23 @@ class RCG():
         """Representat the optimizer as a string."""
         return self.__name__
 
-    def _check_stopping_criterion(self, time0, iters=-1, gradnorm=float('inf'),
-                                  stepsize=float('inf'), costevals=-1):
+    def _check_stopping_criterion(self, time0, gradnorm=float('inf'),
+                                  stepsize=float('inf'), funcvar=float('inf')):
         status = - 1
-        if gradnorm <= self._parms.mingradnorm:
+        if gradnorm <= self._parms.tol:
             status = 0
         elif stepsize <= self._parms.minstepsize:
             status = 1
-        elif iters >= self._parms.maxiter:
+        elif self._iters >= self._parms.maxiter:
             status = 2
         elif time.time() >= time0 + self._parms.maxtime:
             status = 3
-        elif costevals >= self._parms.maxcostevals:
+        elif self._costev >= self._parms.maxcostevals:
             status = 4
+        elif funcvar <= self._parms.tol:
+            status = 5
         elif jnp.isnan(gradnorm):
-            raise ValueError("A wild nan appeared, iteration {}".format(iters))
+            raise ValueError("A wild nan appeared, iteration {}".format(self._iters))
         return status
 
     def solve(self, objective, gradient, x=None, key=None):
@@ -354,7 +356,7 @@ class RCG():
         """
         msg = ("status meaning: 0=converged, 1=stepsize too small, "
                "2=max iters reached, 3=max time reached, "
-               "4=max cost evaluations, "
+               "4=max cost evaluations, 5=function value not changing"
                "-1=undefined"
                )
 
@@ -388,9 +390,10 @@ class RCG():
                                  " the algorithm or a valid random key"
                                  " to perform random initialization")
 
-        k = 0
+        self._iters = 0
         stepsize = 1.
         f0 = cost(x)
+        fold = jnp.inf
         gr = grad(x)
         grnorm = self.man.norm(x, gr)
 
@@ -406,7 +409,7 @@ class RCG():
                 grnorm=jnp.array([grnorm]),
                 fev=jnp.array([self._costev], dtype=int),
                 gev=jnp.array([self._gradev], dtype=int),
-                it=jnp.array([k], dtype=int),
+                it=jnp.array([self._iters], dtype=int),
                 stepsize=jnp.array([1.]),
                 time=jnp.array([time.time() - t_start])
                 )
@@ -430,17 +433,16 @@ class RCG():
             try:
                 status = self._check_stopping_criterion(
                     t_start,
-                    k,
                     grnorm,
                     stepsize,
-                    self._costev
+                    jnp.abs(f0 - fold),
                     )
             except ValueError as e:
                 status = -1
                 print(e)
                 break
 
-            if status >= 0:
+            if (status >= 0):
                 break
 
             def cost_and_grad(t):
@@ -468,12 +470,14 @@ class RCG():
                 print('\talpha: {}'.format(alpha))
                 print('\tbeta: {}'.format(beta))
 
+            
+
             x = newx
             f0 = newf
             gr = newgr
             grnorm = newgrnorm
 
-            k += 1
+            self._iters += 1
 
             if self._parms.logverbosity:
                 logs = logs._replace(
@@ -482,7 +486,7 @@ class RCG():
                     grnorm=jnp.append(logs.grnorm, grnorm),
                     fev=jnp.append(logs.fev, self._costev),
                     gev=jnp.append(logs.gev, self._gradev),
-                    it=jnp.append(logs.it, k),
+                    it=jnp.append(logs.it, self._iters),
                     stepsize=jnp.append(logs.stepsize, stepsize),
                     time=jnp.append(logs.time, time.time() - t_start)
                     )
@@ -498,7 +502,7 @@ class RCG():
             grnorm=grnorm,
             nfev=self._costev,
             ngev=self._gradev,
-            nit=k,
+            nit=self._iters,
             stepsize=stepsize,
             time=(time.time() - t_start)
             )

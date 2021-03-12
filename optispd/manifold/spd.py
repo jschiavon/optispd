@@ -106,10 +106,9 @@ class SPD():
         """Return a random point on the manifold."""
         if self._m == 1:
             A = random.normal(key, shape=(self._p, self._p))
-            return jnp.matmul(A, jnp.swapaxes(A, -2, -1))
         else:
             A = random.normal(key, shape=(self._m, self._p, self._p))
-            return vmap(jnp.matmul)(A, jnp.swapaxes(A, -2, -1))
+        return jnp.einsum('...ij,...kj', A, A)
 
     @partial(jit, static_argnums=(0))
     def randvec(self, key, X):

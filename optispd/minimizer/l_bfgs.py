@@ -131,9 +131,9 @@ class OptimizerResult(NamedTuple):
 
     def pprint(self):
         """Print a concise summary of the result."""
-        message = "Optimization {}completed.".format("" if self.success else "not ")
+        message = "Optimization {}completed (status {}).".format("" if self.success else "not ", self.status)
         details = "{} iterations in {:.3f} s".format(self.nit, self.time)
-        print(message + "\n\t" + details)
+        print(message + "\t" + details)
 
 
 class OptimizerLog(NamedTuple):
@@ -325,7 +325,7 @@ class RL_BFGS():
         stepsize = 1.
 
         memorized_shape = (self._parms.memory,) + x.shape
-
+        
         self.sk = jnp.zeros(shape=(memorized_shape))
         self.yk = jnp.zeros(shape=(memorized_shape))
         self.rhok = jnp.zeros(shape=(self._parms.memory))
