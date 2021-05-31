@@ -131,7 +131,7 @@ class OptimizerResult(NamedTuple):
         """Print a concise summary of the result."""
         message = "Optimization {}completed.".format("" if self.success else "not ")
         details = "{} iterations in {:.3f} s".format(self.nit, self.time)
-        print(message + "\n\t" + details)
+        print(message + "\t" + details)
 
 
 class OptimizerLog(NamedTuple):
