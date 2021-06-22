@@ -69,16 +69,20 @@ for p in ps:
     print(orig_man)
 
     for run in trange(n_tests):
-        optim_rcg = minimizer(man, method='rcg', bethamethod='hybridhsdy',
+        optim_rcg = minimizer(man, method='rcg', bethamethod='polakribiere',
                               maxiter=maxiter, tol=tol,
                               verbosity=0, logverbosity=logs)
         optim_rsd = minimizer(man, method='rsd',
                               maxiter=maxiter, mingradnorm=tol,
                               verbosity=0, logverbosity=logs)
-        optim_rlbfgs = minimizer(man, method='rlbfgs',
-                                 maxiter=maxiter, mingradnorm=tol,
-                                 verbosity=0, logverbosity=logs)
+        # optim_rlbfgs = minimizer(man, method='rlbfgs',
+        #                          maxiter=maxiter, mingradnorm=tol,
+        #                          verbosity=0, logverbosity=logs)
 
+        optimizers = [optim_rcg,
+                      optim_rsd,
+                      #optim_rlbfgs
+                     ]
         RNG, key = random.split(RNG)
         t_cov, t_mu = orig_man.rand(key)
         RNG, key = random.split(RNG)
@@ -130,7 +134,7 @@ for p in ps:
         if chol:
             init_chol = jnp.ones_like(MLE_chol)
 
-        for i, opt in enumerate([optim_rcg, optim_rsd, optim_rlbfgs]):
+        for i, opt in enumerate(optimizers):
             result = opt.solve(fun_rep, gra_rep, x=init_rep)
             res = index_update(res, index[i, run, 0], p)
             res = index_update(res, index[i, run, 1], result.time)

@@ -115,6 +115,10 @@ class OptimizerResult(NamedTuple):
             sz = self.x.size
         except AttributeError:
             sz = sum(x.size for x in self.x)
+        if self.nit > 0:
+            timeit = self.time / self.nit
+        else:
+            timeit = jnp.nan
         return (
             "{}.\n---\nSuccess: {} with status {} in {:.3f} s.\n"
             "[{}]\n"
@@ -125,7 +129,7 @@ class OptimizerResult(NamedTuple):
             ).format(
                 self.name,
                 self.success, self.status, self.time, self.message,
-                self.nit, self.nfev, self.ngev, self.time / self.nit,
+                self.nit, self.nfev, self.ngev, timeit,
                 self.fun, self.grnorm, self.stepsize,
                 self.x if sz < 50 else '\t... Too big to show...'
                 )
@@ -184,7 +188,7 @@ def _precon(x, g):
 def _betachoice(method, manifold):
     if method == 'hagerzhang':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, d, gr)
+            oldgr = manifold.vector_transport(x, gr, d)
             diff = newgr - oldgr
             deno = manifold.inner(newx, diff, newd)
             numo = manifold.inner(newx, diff, newgr)
@@ -198,7 +202,7 @@ def _betachoice(method, manifold):
             return beta
     elif method == 'hybridhsdy':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, d, gr)
+            oldgr = manifold.vector_transport(x, gr, d)
             diff = newgr - oldgr
             deno = manifold.inner(newx, diff, newd)
             numeHS = manifold.inner(newx, diff, newgr)
@@ -211,14 +215,14 @@ def _betachoice(method, manifold):
                 manifold.inner(x, gr, gr)
     elif method == 'polakribiere':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, d, gr)
+            oldgr = manifold.vector_transport(x, gr, d)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
             grinn = manifold.inner(x, gr, gr)
             return max(0, ip_diff / grinn)
     elif method == 'hestenesstiefel':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, d, gr)
+            oldgr = manifold.vector_transport(x, gr, d)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
             den_dif = manifold.inner(newx, diff, newd)
@@ -228,7 +232,7 @@ def _betachoice(method, manifold):
                 beta = 1.
             return beta
     else:
-        raise NotImplementedError
+        raise NotImplementedError("The selected method does not exists.")
     return compute_beta
 
 
@@ -404,7 +408,6 @@ class RCG():
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
                 fun=jnp.array([f0]),
-                # x = jnp.array([x]),
                 x=[x],
                 grnorm=jnp.array([grnorm]),
                 fev=jnp.array([self._costev], dtype=int),
@@ -426,7 +429,7 @@ class RCG():
                 df0 = - grnorm
 
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
+                print('iter: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
                 print('\tdirectional derivative: {:.2f}'.format(df0))
 
@@ -435,7 +438,7 @@ class RCG():
                     t_start,
                     grnorm,
                     stepsize,
-                    jnp.abs(f0 - fold),
+                    jnp.abs((f0 - fold) / f0),
                     )
             except ValueError as e:
                 status = -1
@@ -461,18 +464,20 @@ class RCG():
             newf = ls_results.f_k
             newgr = ls_results.g_k
             newgrnorm = self.man.norm(newx, newgr)
-            newd = self.man.vector_transport(x, alpha * d, d)
+            newd = self.man.vector_transport(x, d, alpha * d)
 
             beta = self.compute_beta(x, newx, gr, newgr, alpha * d, newd)
+            if jnp.isnan(beta):
+                beta = 0.
+
             d = - newgr + beta * newd
 
             if self._parms.verbosity >= 2:
                 print('\talpha: {}'.format(alpha))
                 print('\tbeta: {}'.format(beta))
 
-            
-
             x = newx
+            fold = f0
             f0 = newf
             gr = newgr
             grnorm = newgrnorm
@@ -514,52 +519,3 @@ class RCG():
             return result, logs
         return result
 
-
-"""
-Old linesearch code:
-    def _linesearch(self, cost, x, d, f0, df0, old_f0):
-        dnorm = self.man.norm(x, d)
-        alpha = jnp.where(
-            old_f0 == jnp.inf,
-            self._ls_pars.ls_initial_step / dnorm,
-            2 * (f0 - old_f0) / df0 * self._ls_pars.ls_optimism
-            )
-        if self._ls_pars.ls_verbosity >= 1:
-            print('\tstarting linesearch with alpha: {}'.format(alpha))
-
-        newx = self.man.retraction(x, alpha * d)
-        newf = cost(newx)
-        k = 1
-
-        while ((newf > f0 + self._ls_pars.ls_suff_decr * alpha * df0)
-                and (k <= self._ls_pars.ls_maxiter)):
-            alpha = self._ls_pars.ls_contraction * alpha
-
-            if self._ls_pars.ls_verbosity >= 2:
-                print('\t\titer {}\n\t\tnew alpha: {}'.format(k, alpha))
-
-            newx = self.man.retraction(x, alpha * d)
-            newf = cost(newx)
-
-            if self._ls_pars.ls_verbosity >= 2:
-                print('\t\tnew function: {}'.format(newf))
-
-            k += 1
-
-        if newf > f0:
-            alpha = 0
-            newx = x
-            newf = f0
-
-        stepsize = abs(alpha * dnorm)
-
-        lsresult = LineSearchResult(
-            alpha=alpha,
-            nit=k-1,
-            x=newx,
-            fun=newf,
-            stepsize=stepsize
-            )
-
-        return lsresult
-"""

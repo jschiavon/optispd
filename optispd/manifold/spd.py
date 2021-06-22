@@ -236,7 +236,8 @@ class SPD():
         This transport parallely vector `U` in the tangent space at `X`
         to its corresponding vector along the direction given by vector `W`.
         """
-        if self._approximated:
-            return self.secondorder_vtransport(X, U, W)
-        else:
-            return self.vtransport(X, U, W)
+        # if self._approximated:
+        #     return self.secondorder_vtransport(X, U, W)
+        # else:
+        #     return self.vtransport(X, U, W)
+        return self.vtransport(X, U, W)

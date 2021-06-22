@@ -36,8 +36,8 @@ class OptimizerParams(NamedTuple):
             maximum run time
         - maxiter (int, default 100)
             maximum number of iterations
-        - mingradnorm  (float, default 1e-8)
-            minimum gradient norm
+        - tol  (float, default 1e-8)
+            minimum gradient norm and relative function variation
         - minstepsize  (float, default 1e-16)
             minimum length of the stepsize
         - maxcostevals (int, default 5000)
@@ -52,7 +52,7 @@ class OptimizerParams(NamedTuple):
 
     maxtime: Union[float, jnp.ndarray] = 100
     maxiter: Union[int, jnp.ndarray] = 100
-    mingradnorm: Union[float, jnp.ndarray] = 1e-6
+    tol: Union[float, jnp.ndarray] = 1e-8
     minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
     verbosity: Union[int, jnp.ndarray] = 0
@@ -234,18 +234,23 @@ class RSD():
         """Representat the optimizer as a string."""
         return self.__name__
 
-    def _check_stopping_criterion(self, time0, iters=-1, grnorm=float('inf'), stepsize=float('inf'), costevals=-1):
+    def _check_stopping_criterion(self, time0, gradnorm=float('inf'),
+                                  stepsize=float('inf'), funcvar=float('inf')):
         status = - 1
-        if grnorm <= self._parms.mingradnorm:
+        if gradnorm <= self._parms.tol:
             status = 0
         elif stepsize <= self._parms.minstepsize:
             status = 1
-        elif iters >= self._parms.maxiter:
+        elif self._iters >= self._parms.maxiter:
             status = 2
         elif time.time() >= time0 + self._parms.maxtime:
             status = 3
-        elif costevals >= self._parms.maxcostevals:
+        elif self._costev >= self._parms.maxcostevals:
             status = 4
+        elif funcvar <= self._parms.tol:
+            status = 5
+        elif jnp.isnan(gradnorm):
+            raise ValueError("A wild nan appeared, iteration {}".format(self._iters))
         return status
 
     def solve(self, objective, gradient, x=None, key=None):
@@ -300,9 +305,10 @@ class RSD():
                                  " the algorithm or a valid random key"
                                  " to perform random initialization")
 
-        k = 0
+        self._iters = 0
         stepsize = 1.
         f0 = cost(x)
+        fold = jnp.inf
         gr = grad(x)
         grnorm = self.man.norm(x, gr)
         d = - gr
@@ -318,24 +324,29 @@ class RSD():
                 grnorm=jnp.array([grnorm]),
                 fev=jnp.array([self._costev], dtype=int),
                 gev=jnp.array([self._gradev], dtype=int),
-                it=jnp.array([k], dtype=int),
+                it=jnp.array([self._iters], dtype=int),
                 stepsize=jnp.array([1.]),
                 time=jnp.array([time.time() - t_start])
                 )
 
         while True:
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
+                print('iter: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
                 print('\tdirectional derivative: {:.2f}'.format(df0))
 
-            status = self._check_stopping_criterion(
-                t_start,
-                k,
-                grnorm,
-                stepsize,
-                self._costev
-                )
+            try:
+                status = self._check_stopping_criterion(
+                    t_start,
+                    grnorm,
+                    stepsize,
+                    jnp.abs((f0 - fold) / f0),
+                    )
+            except ValueError as e:
+                status = -1
+                print(e)
+                break
+
             if status >= 0:
                 break
 
@@ -352,13 +363,14 @@ class RSD():
             alpha = ls_results.a_k
             stepsize = jnp.abs(alpha * df0)
             x = self.man.retraction(x, alpha * d)
+            fold = f0
             f0 = ls_results.f_k
             gr = ls_results.g_k
             grnorm = self.man.norm(x, gr)
             d = - gr
             df0 = self.man.inner(x, d, gr)
             # df0 = -jnp.sqrt(jnp.abs(df0)) if df0 < 0 else jnp.sqrt(df0)
-            k += 1
+            self._iters  += 1
             if self._parms.verbosity >= 2:
                 print('\talpha: {}'.format(alpha))
 
@@ -369,7 +381,7 @@ class RSD():
                     grnorm=jnp.append(logs.grnorm, grnorm),
                     fev=jnp.append(logs.fev, self._costev),
                     gev=jnp.append(logs.gev, self._gradev),
-                    it=jnp.append(logs.it, k),
+                    it=jnp.append(logs.it, self._iters),
                     stepsize=jnp.append(logs.stepsize, stepsize),
                     time=jnp.append(logs.time, time.time() - t_start)
                     )
@@ -385,7 +397,7 @@ class RSD():
                 grnorm=grnorm,
                 nfev=self._costev,
                 ngev=self._gradev,
-                nit=k,
+                nit=self._iters,
                 stepsize=stepsize,
                 time=(time.time() - t_start)
                 )
@@ -398,50 +410,3 @@ class RSD():
         return result
 
 
-"""
-Old linesearch code:
-    def _linesearch(self, cost, x, d, f0, df0, old_f0):
-        dnorm = self.man.norm(x, d)
-        alpha = jnp.where(
-            old_f0 == jnp.inf,
-            self._ls_pars.ls_initial_step / dnorm,
-            2 * (f0 - old_f0) / df0 * self._ls_pars.ls_optimism
-            )
-        if self._ls_pars.ls_verbosity >= 1:
-            print('\tstarting linesearch with alpha: {}'.format(alpha))
-
-        newx = self.man.retraction(x, alpha * d)
-        newf = cost(newx)
-        k = 1
-
-        while ((newf > f0 + self._ls_pars.ls_suff_decr * alpha * df0)
-                and (k <= self._ls_pars.ls_maxiter)):
-            alpha = self._ls_pars.ls_contraction * alpha
-
-            if self._ls_pars.ls_verbosity >= 2:
-                print('\t\titer {}\n\t\tnew alpha: {}'.format(k, alpha))
-
-            newx = self.man.retraction(x, alpha * d)
-            newf = cost(newx)
-
-            if self._ls_pars.ls_verbosity >= 2:
-                print('\t\tnew function: {}'.format(newf))
-
-            k += 1
-
-        if newf > f0:
-            alpha = 0
-            newx = x
-            newf = f0
-
-        stepsize = abs(alpha * dnorm)
-
-        lsresult = LineSearchResult(
-            alpha=alpha,
-            nit=k-1,
-            x=newx,
-            fun=newf,
-            stepsize=stepsize
-            )
-        return lsresult
-"""

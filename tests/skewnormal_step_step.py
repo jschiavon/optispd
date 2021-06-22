@@ -111,7 +111,7 @@ for p in tqdm(ps):
 
         tic = time()
         while True:
-            #print('Iteration: {}, function value {}...'.format(k, f0))
+            # print('Iteration: {}, function value {}...'.format(k, f0))
             
             ### Sigma part
             # print('\tSigma part')
