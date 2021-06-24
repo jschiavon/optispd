@@ -46,6 +46,11 @@ def _expm(X):
     return jnp.einsum('...ij,...j,...lj', v, jnp.exp(w), v)
 
 
+@jit
+def _multitransp(X):
+    return jnp.swapaxes(X, -2, -1)
+
+
 class SPD():
     """Manifold of (p x p) symmetric positive definite matrix."""
 
@@ -132,7 +137,7 @@ class SPD():
     @partial(jit, static_argnums=(0))
     def proj(self, X, Y):
         """Return projection of `Y` to the tangent space in `X`."""
-        return (Y + jnp.swapaxes(Y, -2, -1)) / 2
+        return (Y + _multitransp(Y)) / 2
 
     @partial(jit, static_argnums=(0))
     def egrad2rgrad(self, X, G):
@@ -223,8 +228,8 @@ class SPD():
         AUA = jnp.einsum('...ji,...jk', A, UA)
         UAA = jnp.matmul(U, AA)
 
-        first_order = UA + jnp.swapaxes(UA, -2, -1)
-        second_order = AUA + UAA + jnp.swapaxes(UAA, -2, -1)
+        first_order = UA + _multitransp(UA)
+        second_order = AUA + UAA + _multitransp(UAA)
 
         return U + first_order + second_order
 
@@ -240,4 +245,7 @@ class SPD():
         #     return self.secondorder_vtransport(X, U, W)
         # else:
         #     return self.vtransport(X, U, W)
-        return self.vtransport(X, U, W)
+        if self._p > 5:
+            return self.secondorder_vtransport(X, U, W)
+        else:
+            return self.vtransport(X, U, W)

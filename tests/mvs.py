@@ -1,326 +1,263 @@
+"""MIT License
+
+Copyright (c) 2021 Jacopo Schiavon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
 import jax.numpy as jnp
-from jax import jit, grad, random
+from jax import jit, random, grad
 from jax.scipy.stats import multivariate_normal as mvn
 from jax.scipy.stats import norm
-from time import time
-
-from scipy.optimize import minimize
-from scipy.integrate import quad
-
-from itertools import product
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set_theme("talk", "darkgrid")
+from jax.ops import index_update, index
 
 from jax.config import config
+
+from scipy.optimize import minimize
+
+import pandas as pd
+from time import time
+try:
+    from tqdm import trange
+except ModuleNotFoundError:
+    trange = range
+import os
+
 config.update('jax_enable_x64', True)
 
-from skewnormal import SkewNormal
-from optispd.manifold import Product, SPD, Euclidean
 from optispd.minimizer import minimizer
+from optispd.manifold import SPD, Euclidean, Product
+from skewnormal import SkewNormal
+
+seed = 0
+RNG = random.PRNGKey(seed)
+
+sims_dir = "simulations"
+os.makedirs(sims_dir, exist_ok=True)
+
+n_tests = 10
+ps = [2, 3, 5]
+# ps = [10, 25]
+
+N = 1000
+tol = 1e-5
+maxiter = 50
+maxiter_chol = 2000
+logs = False
+chol = True
 
 
-@jit
-def loglikelihood(sigma, theta, data):
-    """Compute the loglikelihood for the skewnormal."""
+def ll(sigma, theta, y):
+    p = y.shape[-1]
     sc = jnp.sqrt(jnp.diag(sigma))
     al = jnp.einsum('i,i->i', 1/sc, theta)
-    capital_phi = jnp.sum(norm.logcdf(jnp.matmul(al, data.T)))
+    capital_phi = jnp.sum(norm.logcdf(jnp.matmul(al, y.T)))
     small_phi = jnp.sum(
         mvn.logpdf(
-            data,
-            mean=jnp.zeros(p),
-            cov=sigma
-        ))
-    return (2 + small_phi + capital_phi)
-
-
-@jit
-def pdf(y, sigma, theta):
-    """Compute the pdf for the skewnormal."""
-    sc = jnp.sqrt(jnp.diag(sigma))
-    al = jnp.einsum('i,i->i', 1/sc, theta)
-    capital_phi = norm.logcdf(jnp.matmul(al, y.T))
-    small_phi = mvn.logpdf(
             y,
             mean=jnp.zeros(p),
             cov=sigma
-        )
-    return jnp.exp(2 + small_phi + capital_phi)
+        ))
+    return - (2 + small_phi + capital_phi)
 
 
-@jit
-def loglik_normal(X, data):
-    y = jnp.concatenate([data.T, jnp.ones(shape=(1, n))], axis=0)
-    datapart = jnp.trace(jnp.linalg.solve(X, jnp.matmul(y, y.T)))
-    return 0.5 * (n * jnp.linalg.slogdet(X)[1] + datapart)
+def ll_chol(pars, y):
+    p = y.shape[-1]
+    X, theta = pars[:-p], pars[-p:]
+    sigma = index_update(
+        jnp.zeros(shape=(p, p)),
+        jnp.triu_indices(p),
+        X).T
+    sigma = jnp.matmul(sigma, sigma.T)
+    return ll(sigma, theta, y)
 
 
-def expval(xi, omega, alpha):
-    def func(z):
-        first = norm.cdf(alpha * z)
-        second = jnp.log(2  * norm.cdf(omega * z + xi))
-        third = 2 * jnp.exp(-0.5 * z**2) / jnp.sqrt(2 * jnp.pi)
-        return first * second * third
-    right = quad(func, 0, jnp.inf)[0]
-    left = quad(lambda x: func(-x), -jnp.inf, 0)[0]
-    return left + right
+def generate_data(k, q):
+    k, key = random.split(k)
+    tslant = random.normal(key, shape=(q,))
 
+    k, key = random.split(k)
+    tcov = random.normal(key, shape=(q, q))
+    tcov = jnp.matmul(tcov, tcov.T)
 
-@jit
-def D_kl_0(om1, om2, k, xi1, xi2):
-    logdets = jnp.linalg.slogdet(om2)[1] - jnp.linalg.slogdet(om1)[1]
-    trace = jnp.trace(jnp.linalg.solve(om2, om1))
-    bilin = jnp.einsum('i,ij,j', xi1 - xi2, jnp.linalg.inv(om2), xi1-xi2)
-    return 0.5 * (logdets + trace + bilin - k)
-
-
-def kullback_lieber(parTrue, parEst, k):
-    xi1, om1, eta1 = tuple(parTrue)
-    xi2, om2, eta2 = tuple(parEst)
-    D0 = D_kl_0(om1, om2, k, xi1, xi2)
-    if jnp.isnan(D0):
-        print('nan for D0')
-        raise ValueError
-    bili1 = jnp.einsum('i,ij,j', eta1, om1, eta1)
-    delta1 = jnp.matmul(om1, eta1) / jnp.sqrt(1 + bili1)
-    eta1delta1 = jnp.matmul(eta1, delta1)
-    W11 = expval(0,
-                 bili1,
-                 jnp.sqrt(bili1)
-    )
-    if jnp.isnan(W11):
-        print('nan for W11')
-        print(bili1, eta1delta1 / jnp.sqrt(bili1 - eta1delta1 ** 2))
-        raise ValueError
+    tmean = jnp.zeros(shape=(q,))
     
-    bili2 = jnp.einsum('i,ij,j', eta2, om1, eta2)
-    eta2delta1 = jnp.matmul(eta2, delta1)
-    W21 = expval(jnp.matmul(eta1, xi1 - xi2),
-                 bili2,
-                 eta2delta1 / jnp.sqrt(bili2 - eta2delta1 ** 2)
-    )
-    if jnp.isnan(W21):
-        print('nan for W21')
-        raise ValueError
+    # assert tcov.shape == (q, q)
+    sn = SkewNormal(loc=tmean, cov=tcov, sl=tslant)
 
-    scal = jnp.sqrt(2 / jnp.pi) * jnp.einsum('i,i', xi1 - xi2, jnp.linalg.solve(om2, delta1))
-    if jnp.isnan(scal):
-        print('nan for scal')
-        raise ValueError
-    return D0 + W11 - W21 + scal
+    k, key = random.split(k)
+    data = sn.sample(key, shape=(N,))
+
+    # ftrue = ll(tcov, tslant, data)
+    return data, tcov, tslant
 
 
-@jit
-def delta(om, eta):
-    return jnp.matmul(om, eta) / jnp.sqrt(1 + jnp.einsum('i,ij,j', eta, om, eta))
 
+for p in ps:
+    res = jnp.zeros(shape=(2, n_tests, 7))
+    if chol:
+        res_cho = jnp.zeros(shape=(n_tests, 7))
 
-@jit
-def J0(par1, par2, k):
-    invo1 = jnp.linalg.inv(par1[1])
-    invo2 = jnp.linalg.inv(par2[1])
-    first = jnp.trace(jnp.matmul(invo1, par2[1]))
-    second = jnp.trace(jnp.matmul(invo2, par1[1]))
-    diff = par1[0] - par2[0]
-    third = 2 * jnp.einsum('i,ij,j', diff, invo1 + invo2, diff)
-    return 0.5 * (first + second + third - 2 * k)
+    man = Product([SPD(p), Euclidean(p)])
+    print(man)
 
+    for run in trange(n_tests):
+        optim_rcg = minimizer(man, method='rcg', bethamethod='fletcherreeves',
+                              maxiter=maxiter, tol=tol,
+                              verbosity=0, logverbosity=logs)
+        optim_rsd = minimizer(man, method='rsd',
+                              maxiter=maxiter, mingradnorm=tol,
+                              verbosity=0, logverbosity=logs)
+        # optim_rlbfgs = minimizer(man, method='rlbfgs',
+        #                          maxiter=maxiter, mingradnorm=tol,
+        #                          verbosity=0, logverbosity=logs)
 
-def J_divergence(par1, par2, k):
-    first = J0(par1[:-1], par2[:-1], k)
-    
-    d1 = delta(par1[1], par1[2])
-    d2 = delta(par2[1], par2[2])
-    diff = par1[0] - par2[0]
-    second = jnp.linalg.solve(par2[1], d1) - jnp.linalg.solve(par1[1], d2)
-    second = jnp.sqrt(2 / jnp.pi) * jnp.dot(diff, second)
-
-    bili11 = jnp.einsum('i,ij,j', par1[2], par1[1], par1[2])
-    bili22 = jnp.einsum('i,ij,j', par2[2], par2[1], par2[2])
-    bili21 = jnp.einsum('i,ij,j', par2[2], par1[1], par2[2])
-    bili12 = jnp.einsum('i,ij,j', par1[2], par2[1], par1[2])
-    W11, W22, W12, W21 = 0, 0, 0, 0
-    if bili11 != 0:
-        W11 = expval(0,
-                    bili11,
-                    jnp.sqrt(bili11)
-        )
-    if bili22 != 0:    
-        W22 = expval(0,
-                    bili22,
-                    jnp.sqrt(bili22)
-        )
-    if bili12 != 0:
-        W12 = expval(jnp.dot(par1[2], -diff),
-                    bili12,
-                    jnp.dot(par1[2], d2) / jnp.sqrt(bili12 - jnp.dot(par1[2], d2))
-
-        )
-    if bili21 != 0:
-        W21 = expval(jnp.dot(par2[2], diff),
-                    bili21,
-                    jnp.dot(par2[2], d1) / jnp.sqrt(bili21 - jnp.dot(par2[2], d1))
-
-        )
-    return first + second + (W11 - W12 + W22 - W21)
-
-
-n = 1000
-tol = 1e-4
-seed = 0
-rng = random.PRNGKey(seed)
-
-dists = []
-
-for p in [2, 3, 4, 5, 10]:
-    man = SPD(p=p)
-    man_norm = SPD(p=p+1)
-
-    for it in range(20):
-        rng, *key = random.split(rng, 4)
-        # mean = random.normal(key[0], shape=(p,))
-        mean = jnp.zeros(shape=(p,))
-        cov = random.normal(key[1], shape=(p, p))
-        cov = jnp.matmul(cov, cov.T)
-        slant = random.uniform(key[2], shape=(p,), maxval=10)
-
-        sn = SkewNormal(loc=mean, cov=cov, sl=slant)
-
-        rng, key = random.split(rng)
-        data = sn.sample(key, shape=(n,))
-
-        loglik = jit(lambda x, y: - loglikelihood(x, y, data))
+        optimizers = [optim_rcg,
+                      optim_rsd,
+                      #optim_rlbfgs
+                     ]
+        RNG, key = random.split(RNG)
+        data, t_cov, t_mu = generate_data(key, p)
         
-        fun_norm = jit(lambda x: loglik_normal(x, data))
-        gra_norm = jit(grad(fun_norm))
+        MLE_rep = t_cov, t_mu
 
-        true_loglik = loglik(sn.cov, sn.slant)
+        if chol:
+            MLE_chol = jnp.linalg.cholesky(t_cov)
+            MLE_chol = jnp.append(MLE_chol.T[jnp.triu_indices(p)], t_mu)
 
-        # print("True values:")
-        # print("\tCov: {}".format(sn.cov.ravel()))
-        # print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sn.cov)))
-        # print("\tSlant: {} (norm: {})".format(sn.slant, jnp.linalg.norm(sn.slant)))
-        # print("\tLoglik: {:.2f} (check: {:.2f})".format(true_loglik, jnp.sum(sn.logpdf(data))))
+        def nloglik(X):
+            sigma = X[0]
+            theta = X[1]
+            return ll(sigma, theta, data)
+            
+        if chol:
+            def nloglik_chol(X):
+                return ll_chol(X, data)
 
-        optimizer = minimizer(
-            man, method='rsd',
-            maxiter=1,
-            mingradnorm=tol,
-            verbosity=0, logverbosity=False
-            )
+            fun_chol = jit(nloglik_chol)
+            gra_chol = jit(grad(fun_chol))
 
-        k = 0
-        maxit = 100
+            true_fun_chol = fun_chol(MLE_chol)
+            true_gra_chol = gra_chol(MLE_chol)
+            # print('Cholesky function on MLE: ', true_fun_chol)
+            # print('Gradient norm of cholesky function on MLE: ', jnp.linalg.norm(true_gra_chol))
 
-        rng, *key = random.split(rng, 5)
-        sig = random.normal(key[0], shape=(p, p))
-        sig = jnp.matmul(sig, sig.T)
+        fun_rep = jit(nloglik)
+        gra_rep = jit(grad(fun_rep))
 
-        th = random.uniform(key[1], shape=(p,), maxval=10)
+        true_fun_rep = fun_rep(MLE_rep)
+        true_gra_rep = gra_rep(MLE_rep)
+        true_grnorm_rep = man.norm(MLE_rep, true_gra_rep)
+        # print('Reparametrized function on MLE: ', true_fun_rep)
+        # print('Gradient norm of reparametrized function on MLE: ', true_grnorm_rep)
 
-        logl = [loglik(sig, th)]
-        # print(logl)
+        init_rep = [jnp.identity(p), jnp.ones_like(t_mu)]
+        if chol:
+            init_chol = jnp.ones_like(MLE_chol)
 
-        tic = time()
+        for i, opt in enumerate(optimizers):
+            result = opt.solve(fun_rep, gra_rep, x=init_rep)
+            # if jnp.isnan(result.grnorm):
+            #     opt = minimizer(man, method='rcg', bethamethod='fletcherreeves',
+            #                   maxiter=maxiter, tol=tol,
+            #                   verbosity=10, logverbosity=logs)
+            #     result = opt.solve(fun_rep, gra_rep, x=init_rep)
+            #     raise ValueError
+            res = index_update(res, index[i, run, 0], p)
+            res = index_update(res, index[i, run, 1], result.time)
+            res = index_update(res, index[i, run, 2], result.nit)
+            res = index_update(res, index[i, run, 3], (result.fun - true_fun_rep) / true_fun_rep)
+            res = index_update(res, index[i, run, 4], man.dist(result.x, MLE_rep))
+            res = index_update(res, index[i, run, 5], result.grnorm)
+            res = index_update(res, index[i, run, 6], i)
 
-        while True:
-            # print("Iteration {} starts from:".format(k))
-            # print("\tSigma : {}".format(sig.ravel()))
-            # print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sig)))
-            # print("\tTheta: {} (norm: {})".format(th, jnp.linalg.norm(th)))
-            # print("\tLoglik : {:.2f}".format(logl[-1]))
+        if chol:
+            start = time()
+            result = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, options={'maxiter':maxiter_chol}, tol=tol)
+            # print("{} {} iterations in {:.2f} s".format(res['message'], res['nit'], time() - start))
+            cov = index_update(
+                jnp.zeros(shape=(p, p)),
+                jnp.triu_indices(p),
+                result.x[:-p]).T
+            res_cho = index_update(res_cho, index[run, 0], p)
+            res_cho = index_update(res_cho, index[run, 1], time() - start)
+            res_cho = index_update(res_cho, index[run, 2], result['nit'])
+            res_cho = index_update(res_cho, index[run, 3], (result['fun'] - true_fun_chol) / true_fun_chol)
+            res_cho = index_update(res_cho, index[run, 4], man.dist([cov @ cov.T, result.x[-p:]], MLE_rep))
+            res_cho = index_update(res_cho, index[run, 5], jnp.linalg.norm(result.jac))
+            res_cho = index_update(res_cho, index[run, 6], 3)
 
-            loglik_sig = jit(lambda x: loglik(x, th))
-            gradient_sig = jit(grad(loglik_sig))
+    columns = ['Matrix dimension',
+               'Time', 'Iterations', 'Function difference',
+               'Matrix distance', 'Gradient norm', 'Algorithm']
 
-            res = optimizer.solve(loglik_sig, gradient_sig, x=sig)
+    df = [pd.DataFrame(res[0], columns=columns), 
+          pd.DataFrame(res[1], columns=columns),
+          pd.DataFrame(res[2], columns=columns)]
+    if chol:
+        df.append(pd.DataFrame(res_cho, columns=columns))
 
-            sig = res.x
+    df = pd.concat(df)
 
-            # print('\t...')
+    algo = {'0': 'R-CG', '1': 'R-SD', '2': 'R-LBFGS', '3': 'Cholesky'}
 
-            loglik_th = jit(lambda x: loglik(sig, x))
-            gradient_psi = jit(grad(loglik_th))
+    df['Algorithm'] = df['Algorithm'].astype(int).apply(lambda x: algo[str(x)]).astype('category')
+    df['Matrix dimension'] = df['Matrix dimension'].astype(int)
+    
+    df.to_csv(os.path.join(sims_dir, "mvskew_{}.csv".format(p)), index=False)
 
-            res = minimize(loglik_th, th,
-                        method="cg",
-                        jac=gradient_psi,
-                        tol=tol,
-                        options={'maxiter': 10}
-                        )
-            th = res.x
-
-            logl.append(loglik(sig, th))
-            k += 1
-
-            # print("And ends at:")
-            # print("\tSigma : {}".format(sig.ravel()))
-            # print("\t(Eigs: {})".format(jnp.linalg.eigvalsh(sig)))
-            # print("\tTheta: {} (norm: {})".format(th, jnp.linalg.norm(th)))
-            # print("\tLoglik : {:.2f}".format(logl[-1]))
-
-            if jnp.isclose(logl[-2], logl[-1], rtol=tol) or k == maxit:
-                break
-
-            if jnp.isnan(logl[-1]).any():
-                print("PANIC! NAN APPEARS")
-                break
-
-            # print("\n---\n")
-
-        toc = time()
-
-        print("Optimization {} for dimension {} "
-              "completed in {} steps and {:.2f} s".format(it + 1, p, k, toc - tic))
-
-        opt = minimizer(man_norm, method='rsd', verbosity=1)
-        res = opt.solve(fun_norm, gra_norm, x=jnp.identity(p + 1))
-        muhat = res.x[-1, :-1]
-        covhat = res.x[:-1, :-1] - jnp.outer(muhat, muhat)
-
-        cov_dist = man.dist(sig, cov)
-        slant_dist = jnp.linalg.norm(th - slant)
-        kl_skew = J_divergence((jnp.zeros(p), sig, th), (mean, cov, slant), p)
-        # print(kl_skew)
-        kl_norm = J_divergence((muhat, covhat, jnp.zeros((p))), (mean, cov, slant), p)
-        # print(kl_norm)
-
-        dists.append([p, toc-tic, k,
-                      - true_loglik, - logl[-1], - res.fun,
-                      cov_dist, slant_dist,
-                      kl_skew, kl_norm])
-
-df = pd.DataFrame(data=jnp.array(dists),
-                  columns=["Matrix Dimension", "Time", "Iterations", 
-                           "Lik Skew True", "Lik Skew Est", "Lik norm",
-                           "Covariance distances", "Slant distances",
-                           "K-L skew", "K-L norm"])
-
-df.to_csv('simulations/skewnormal_Jdiv.csv', index=False)
-
-fig, (ax1, ax2) = plt.subplots(1, 2)
-sns.boxplot(data=df, y='Covariance distances', ax=ax1)
-sns.boxplot(data=df, y='Slant distances', ax=ax2)
-plt.show()
-
-
-# plt.plot(jnp.array(logl), label="Estimated loglikelihood")
-# plt.hlines(y=true_loglik, xmin=0, xmax=k, colors='k', linestyles='--', label="Loglikelihood of true values")
-# plt.yscale('log')
-# plt.legend(loc='best')
-# plt.show()
-
-# l = 100
-# x = jnp.linspace(jnp.min(data[:, 0]), jnp.max(data[:, 0]), l)
-# y = jnp.linspace(jnp.min(data[:, 1]), jnp.max(data[:, 1]), l)
-# xy = jnp.array(list(product(x, y)))
-# Z_est = pdf(xy, sig, th).reshape(l, l).T
-# Z_tru = pdf(xy, cov, slant).reshape(l, l).T
-
-# g = sns.jointplot(data=pd.DataFrame(data=data, columns=['x', 'y']),
-#                   x='x', y='y', alpha=0.3)
-# g.ax_joint.contour(x, y, Z_tru, colors='k', alpha=0.6, levels=5, linestyles='dashed')
-# g.ax_joint.contour(x, y, Z_est, colors='r', levels=5)
-# plt.show()
+    del df, result
+# if logs:
+#     f, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(14, 21))
+#
+#     ax1.plot(log_rep.it, jnp.abs((log_rep.fun - true_fun_rep) / true_fun_rep));
+#     ax1.plot(log_rep_rsd.it, jnp.abs((log_rep_rsd.fun - true_fun_rep) / true_fun_rep));
+#     # ax1.plot(log_ori.it, jnp.abs(log_ori.fun - true_fun_ori));
+#     ax1.axhline(y=tol, xmin=0, xmax=maxiter, c='k', ls='--', lw=0.8);
+#     ax1.set_yscale('log');
+#     ax1.set_ylabel(r'$\log\left\vert\frac{\mathcal{L}_\star - \hat{\mathcal{L}}}{\hat{\mathcal{L}}}\right\vert$');
+#
+#     ax2.plot(log_rep.it, log_rep.grnorm);
+#     ax2.plot(log_rep_rsd.it, log_rep_rsd.grnorm);
+#     # ax2.plot(log_ori.it, log_ori.grnorm);
+#     ax2.axhline(y=tol, xmin=0, xmax=maxiter, c='k', ls='--', lw=0.8);
+#     ax2.set_yscale('log');
+#     ax2.set_ylabel(r'$\log\left\vert\Vert\nabla\mathcal{L}_\star\Vert\right\vert$');
+#
+#     ax3.plot(log_rep.it, [man.dist(MLE_rep, log_rep.x[i]) for i in range(results_rep.nit+1)],
+#         label='Reparametrized manifold (CG)');
+#     ax3.plot(log_rep_rsd.it, [man.dist(MLE_rep, log_rep_rsd.x[i]) for i in range(results_rep_rsd.nit+1)],
+#         label='Reparametrized manifold (SD)');
+#     # ax3.plot(log_ori.it, [orig_man.dist(MLE_ori, log_ori.x[i]) for i in range(results_ori.nit+1)],
+#         # label='Original product manifold (CG)');
+#     ax3.axhline(y=tol, xmin=0, xmax=maxiter, c='k', ls='--', lw=0.8);
+#     ax3.set_yscale('log');
+#     ax3.set_ylabel(r'$\log\left\Vert\hat\Omega - \Omega_\star\right\Vert$');
+#
+#     f.suptitle('Optimizers performance for {}-variate normal'.format(p));
+#     plt.xlabel('Iterations');
+#     f.legend();
+#     plt.show()
+#
+#
+#     plt.plot(log_rep.it, log_rep.time, label='Reparametrized manifold (CG)')
+#     plt.plot(log_rep_rsd.it, log_rep_rsd.time, label='Reparametrized manifold (SD)')
+#     plt.yscale('log')
+#     plt.ylabel('log Time')
+#     plt.xlabel('Iterations')
+#     plt.show()

@@ -49,18 +49,19 @@ RNG = random.PRNGKey(seed)
 sims_dir = "simulations"
 os.makedirs(sims_dir, exist_ok=True)
 
-n_tests = 20
-ps = [5, 10, 25, 50, 100]
+n_tests = 30
+ps = [5, 10, 25, 50, 75, 100]
+# ps = [10, 25]
 
 N = 1000
-tol = 1e-4
+tol = 1e-5
 maxiter = 100
+maxiter_chol = 2000
 logs = False
-chol = False
-
+chol = True
 
 for p in ps:
-    res = jnp.zeros(shape=(3, n_tests, 7))
+    res = jnp.zeros(shape=(2, n_tests, 7))
     if chol:
         res_cho = jnp.zeros(shape=(n_tests, 7))
 
@@ -69,7 +70,7 @@ for p in ps:
     print(orig_man)
 
     for run in trange(n_tests):
-        optim_rcg = minimizer(man, method='rcg', bethamethod='polakribiere',
+        optim_rcg = minimizer(man, method='rcg', bethamethod='fletcherreeves',
                               maxiter=maxiter, tol=tol,
                               verbosity=0, logverbosity=logs)
         optim_rsd = minimizer(man, method='rsd',
@@ -136,17 +137,23 @@ for p in ps:
 
         for i, opt in enumerate(optimizers):
             result = opt.solve(fun_rep, gra_rep, x=init_rep)
+            # if jnp.isnan(result.grnorm):
+            #     opt = minimizer(man, method='rcg', bethamethod='fletcherreeves',
+            #                   maxiter=maxiter, tol=tol,
+            #                   verbosity=10, logverbosity=logs)
+            #     result = opt.solve(fun_rep, gra_rep, x=init_rep)
+            #     raise ValueError
             res = index_update(res, index[i, run, 0], p)
             res = index_update(res, index[i, run, 1], result.time)
             res = index_update(res, index[i, run, 2], result.nit)
-            res = index_update(res, index[i, run, 3], result.fun - true_fun_rep)
+            res = index_update(res, index[i, run, 3], (result.fun - true_fun_rep) / true_fun_rep)
             res = index_update(res, index[i, run, 4], man.dist(result.x, MLE_rep))
             res = index_update(res, index[i, run, 5], result.grnorm)
             res = index_update(res, index[i, run, 6], i)
 
         if chol:
             start = time()
-            result = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, tol=tol)
+            result = minimize(fun_chol, init_chol, method='cg', jac=gra_chol, options={'maxiter':maxiter_chol}, tol=tol)
             # print("{} {} iterations in {:.2f} s".format(res['message'], res['nit'], time() - start))
             cov = index_update(
                 jnp.zeros(shape=(p+1, p+1)),
@@ -155,7 +162,7 @@ for p in ps:
             res_cho = index_update(res_cho, index[run, 0], p)
             res_cho = index_update(res_cho, index[run, 1], time() - start)
             res_cho = index_update(res_cho, index[run, 2], result['nit'])
-            res_cho = index_update(res_cho, index[run, 3], result['fun'] - true_fun_chol)
+            res_cho = index_update(res_cho, index[run, 3], (result['fun'] - true_fun_chol) / true_fun_chol)
             res_cho = index_update(res_cho, index[run, 4], man.dist(cov @ cov.T, MLE_rep))
             res_cho = index_update(res_cho, index[run, 5], jnp.linalg.norm(result.jac))
             res_cho = index_update(res_cho, index[run, 6], 3)
@@ -174,9 +181,10 @@ for p in ps:
 
     algo = {'0': 'R-CG', '1': 'R-SD', '2': 'R-LBFGS', '3': 'Cholesky'}
 
-    df['Algorithm'] = df['Algorithm'].astype(int).apply(lambda x: algo[str(x)])
-
-    df.to_csv(os.path.join(sims_dir, "mvn_{}_short.csv".format(p)), index=False)
+    df['Algorithm'] = df['Algorithm'].astype(int).apply(lambda x: algo[str(x)]).astype('category')
+    df['Matrix dimension'] = df['Matrix dimension'].astype(int)
+    
+    df.to_csv(os.path.join(sims_dir, "mvn_{}.csv".format(p)), index=False)
 
     del df, result
 # if logs:
