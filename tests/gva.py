@@ -28,9 +28,10 @@ rng = random.PRNGKey(42)
 N = 1000
 p = 5
 scale_factor = N * p * (p + 1) / 2
-ls_pars = LineSearchParameter(ls_initial_step=2., ls_maxiter=20)
-maxit = 100
-tol = 1e-6
+ls_pars = LineSearchParameter(ls_initial_step=1., ls_maxiter=20)
+maxit = 200
+tol = 1e-5
+verb = 1
 print("Hyperparameters:"
       "\n\tSample size (N): {}"
       "\n\tNumber of covariates (p): {}"
@@ -48,7 +49,7 @@ rng, key = random.split(rng)
 beta = random.multivariate_normal(key, jnp.zeros(shape=(p,)), Omega)
 
 rng, key = random.split(rng)
-X = random.multivariate_normal(key, jnp.zeros(shape=(p,)), jnp.identity(p), shape=(N,))
+X = random.multivariate_normal(key, jnp.zeros(shape=(p,)), 0.1 * jnp.identity(p), shape=(N,))
 
 lam = jnp.exp(X @ beta)
 
@@ -69,15 +70,26 @@ def xmu_diagxsigx(mu, sigma):
 
 
 @jit
+def first_second(mu, sigma):
+    Xmu = jnp.dot(X, mu)
+    first = y * Xmu
+    second_1 = jnp.exp(Xmu)
+    second_2 = jnp.exp(0.5 * jnp.einsum('ij,jk,ik->i', X, sigma, X))
+    second = second_1 * second_2
+    return jnp.sum(first - second)
+
+
+@jit
 def func(mu, sigma):
-    first = jnp.einsum('i,ij,j', y, X, mu) / scale_factor
-    second = jnp.sum(xmu_diagxsigx(mu, sigma)) / scale_factor
-    third = 0.5 * jnp.einsum('ii', jnp.linalg.solve(Omega, sigma)) / scale_factor
-    fourth = 0.5 * jnp.dot(mu, jnp.linalg.solve(Omega, mu)) / scale_factor
-    fifth = 0.5 * jnp.dot(mu, jnp.linalg.solve(sigma, mu)) / scale_factor
-    sixth = 0.5 * jnp.linalg.slogdet(sigma)[1] / scale_factor
+    # first = jnp.einsum('i,ij,j', y, X, mu) #/ scale_factor
+    # second = jnp.sum(xmu_diagxsigx(mu, sigma)) #/ scale_factor
+    third = 0.5 * jnp.einsum('ii', jnp.linalg.solve(Omega, sigma)) #/ scale_factor
+    fourth = 0.5 * jnp.dot(mu, jnp.linalg.solve(Omega, mu)) #/ scale_factor
+    fifth = 0.5 * jnp.dot(mu, jnp.linalg.solve(sigma, mu)) #/ scale_factor
+    sixth = 0.5 * jnp.linalg.slogdet(sigma)[1] #/ scale_factor
     #print("{:.1e}\t{:.1e}\t{:.1e}\t{:.1e}\t{:.1e}\t{:.1e}".format(first, second, third, fourth, fifth, sixth))
-    value = first - second - third - fourth + fifth + sixth
+    # value = first - second - third - fourth + fifth + sixth
+    value = first_second(mu, sigma) - third - fourth + fifth + sixth
     # return - jnp.log(abs(value)) * jnp.sign(value)
     return - value
 
@@ -132,22 +144,24 @@ man = Product(Euclidean(p), SPD(p))
 func_full = jit(lambda x: func(x[0], x[1]))
 grad_full = jit(lambda x: [grad_mu(x[0], x[1]), grad_si(x[0], x[1])])
 
-rng, key = random.split(rng)
-startsig = random.normal(key, shape=(p, p)) * 0.1
+# rng, key = random.split(rng)
+# startsig = random.normal(key, shape=(p, p))
+# startsig = startsig @ startsig.T
 # rng, key = random.split(rng)
 # startmu = random.normal(key, shape=(p,))
 startmu = jnp.ones(shape=(p,))
+startsig = jnp.identity(p)
 
-initval = [startmu, startsig @ startsig.T]
+initval = [startmu, startsig]
 
 f0 = func_full(initval)
 gr0 = grad_full(initval)
 
 optim = minimizer(man=man, method='rcg',
-                  betamethod='hestenesstiefel',
-                  maxiter=300,
+                  betamethod='polakribiere',
+                  maxiter=maxit,
                   tol=tol,
-                  verbosity=1,
+                  verbosity=verb,
                   logverbosity=True
                   )
 res_riem, logs = optim.solve(func_full, grad_full, x=initval)
@@ -166,7 +180,7 @@ f0 = func(mu, sig)
 gr_mu = grad_mu(mu, sig)
 gr_sig = grad_si(mu, sig)
 
-old_f0 = f0
+old_f0 = jnp.inf
 
 k = 0
 func_eval = 0
@@ -174,11 +188,15 @@ func_eval = 0
 tic = time()
 tic_it = toc_it = tic
 
+lls = [f0]
+grs = [(jnp.linalg.norm(gr_mu), man.norm(sig, gr_sig))]
+
 while True:
     if k == 0:
         print('Starting point function value: {:.3e}'.format(f0))
     else:
-        print('Iteration: {}\tfunction value: {:.3e}\t[{:.3f} s]'.format(k, f0, toc_it - tic_it))
+        print('Iteration: {}\tfunction value: {:.3e}\t[{:.3f} s]'.format(k, f0, toc_it - tic_it), end='\r', flush=True)
+        
     tic_it = time()
     
     ### Sigma part
@@ -196,14 +214,16 @@ while True:
             dn = man.inner(xnew, - gn, gn)
             return fn, gn, dn
         
-        ls_results = wolfe_linesearch(cost_and_grad_sig, sig, d, f0, df0, gr_sig, ls_pars)
+        ls_results = wolfe_linesearch(cost_and_grad_sig, sig, d, f0, df0, gr_sig, ls_pars=ls_pars)
+        
+
         sig = man.retraction(sig, ls_results.a_k * d)
         f0 = ls_results.f_k
         gr_sig = ls_results.g_k
         gr_sig_norm = man.norm(sig, gr_sig)
         func_eval += ls_results.nfev
-    else:
-        print('Skipping sigma computations')
+    # else:
+        # print('Skipping sigma computations')
 
     ### Mu part
     # print('\tMu part')
@@ -220,48 +240,48 @@ while True:
             dn = jnp.dot(- gn, gn)
             return fn, gn, dn
         
-        ls_results = wolfe_linesearch(cost_and_grad_mu, mu, d, f0, df0, gr_mu, ls_pars)
+        ls_results = wolfe_linesearch(cost_and_grad_mu, mu, d, f0, df0, gr_mu, ls_pars=ls_pars)
 
         mu = mu + ls_results.a_k * d
         f0 = ls_results.f_k
         gr_mu = ls_results.g_k
         gr_mu_norm = jnp.linalg.norm(gr_mu)
         func_eval += ls_results.nfev
-    else:
-        print('Skipping mu computations')
-
+    # else:
+        # print('Skipping mu computations')
     ### Convergence checks
     if k == maxit:
-        print('Maxiterations reached')
+        print('\nMaxiterations reached')
         print("\tTotal iterations {}\n\tFunction evaluations {}".format(k, func_eval))
         break
     if jnp.isclose(f0, old_f0, rtol=tol):
-        print('Reached function tolerance')
+        print('\nReached function tolerance')
         print("\tTotal iterations {}\n\tFunction evaluations {}".format(k, func_eval))
         break
     if (gr_mu_norm <= tol) and (gr_mu_norm <= tol):
-        print('Reached gradient tolerance')
+        print('\nReached gradient tolerance')
         print("\tTotal iterations {}\n\tFunction evaluations {}".format(k, func_eval))
         break
 
     k += 1
     old_f0 = f0
     toc_it = time()
+    lls.append(f0)
+    grs.append((gr_mu_norm, gr_sig_norm))
+    
 
 toc = time()
 spent_riem = toc - tic
+lls = jnp.array(lls)
 ########################################
 
 ########################################
 ## Cholesky gradient descent
 tic = time()
-init_chol = jnp.append(jnp.identity(p)[jnp.triu_indices(p)], startmu)
+init_chol = jnp.append(jnp.linalg.cholesky(startsig)[jnp.triu_indices(p)], startmu)
 gra_chol = jit(grad(func_chol))
 
-if p < 20:
-    res = minimize(func_chol, init_chol, method='bfgs', jac=gra_chol, tol=tol, options={'disp':True})
-else:
-    res = minimize(func_chol, init_chol, method='cg', jac=gra_chol, tol=tol, options={'disp':True})
+res = minimize(func_chol, init_chol, method='cg', jac=gra_chol, tol=tol, options={'disp':True})
 chol, mu_chol = res.x[:-p], res.x[-p:]
 sig_chol = index_update(
         jnp.zeros(shape=(p,p)),
@@ -280,7 +300,7 @@ print("\n=================\n\tResults:\n")
 print("Full Riemannian:")
 print("\tTime spent {:.2f} s".format(res_riem.time))
 print("\tIterations {}".format(res_riem.nit))
-print("\tTime per iteration {}".format(res_riem.time / res_riem.nit))
+print("\tTime per iteration {}".format(jnp.mean(logs.time[2:])))
 print("\tFinal loglik {:.5e}".format(res_riem.fun))
 print("\tTrue beta ---- Estimated mu (diff: {:.2f}):".format(jnp.linalg.norm(beta - res_riem.x[0])))
 for i in range(p):
@@ -302,7 +322,7 @@ print_matrix(sig)
 print("Cholesky:")
 print("\tTime spent {:.2f} s".format(toc - tic))
 print("\tIterations {}".format(res['nit']))
-print("\tTime per iteration {}".format((toc - tic) / res['nit']))
+print("\tTime per iteration {}".format((toc - tic) / (res['nit']+1)))
 print("\tFinal loglik {:.5e}".format(res['fun']))
 print("\tTrue beta ---- Estimated mu (diff: {:.2f}):".format(jnp.linalg.norm(beta - mu_chol)))
 for i in range(p):
@@ -311,9 +331,22 @@ print("\tEstimated Sigma:")
 print_matrix(sig_chol)
 
 
-fig, ax = plt.subplots(2, 1, sharex=True)
-ax[0].plot(logs.it, jnp.abs(logs.fun))
-ax[0].set_yscale('log')
+fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12,12))
+ax[0].plot(logs.it, jnp.sign(logs.fun) * jnp.log10(jnp.abs(logs.fun)))
+ax[0].plot(range(k+1), jnp.sign(lls) * jnp.log10(jnp.abs(lls)))
+# ax[0].set_yticks([-2, 0, 2, 4])
+# ax[0].set_yticklabels([r'$10^{-2}$', r'$10^{0}$', r'$10^{2}$', r'$10^{4}$'])
+ax[0].set_ylabel('Loglikelihood')
 ax[1].plot(logs.it, logs.grnorm)
 ax[1].set_yscale('log')
+ax[1].set_ylabel('Gradient norm')
+ax[1].set_xlabel('Iterations')
+plt.tight_layout()
+plt.show()
+
+
+plt.plot(logs.it, logs.time)
+plt.yscale('log')
+plt.ylabel('Time / iteration [s]')
+plt.xlabel('Iterations')
 plt.show()

@@ -369,6 +369,7 @@ class RCG():
 
         self._costev = 0
         self._gradev = 0
+        t_start = time.time()
 
         self.compute_beta = _betachoice(
             self._parms.betamethod.lower(),
@@ -382,9 +383,6 @@ class RCG():
         def grad(x):
             self._gradev += 1
             return self.man.egrad2rgrad(x, gradient(x))
-
-        def ls(c_a_g, x, d, f0, df0, g0):
-            return wolfe_linesearch(c_a_g, x, d, f0, df0, g0, self._ls_pars)
 
         if x is None:
             try:
@@ -403,7 +401,8 @@ class RCG():
 
         d = - gr
 
-        t_start = time.time()
+        t_it = time.time() - t_start
+
         if self._parms.logverbosity:
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
@@ -414,11 +413,12 @@ class RCG():
                 gev=jnp.array([self._gradev], dtype=int),
                 it=jnp.array([self._iters], dtype=int),
                 stepsize=jnp.array([1.]),
-                time=jnp.array([time.time() - t_start])
+                time=jnp.array([t_it])
                 )
 
         while True:
             df0 = self.man.inner(x, gr, d)
+            t_st = time.time()
 
             if df0 >= 0:
                 if self._parms.verbosity >= 2:
@@ -428,8 +428,11 @@ class RCG():
                 d = - gr
                 df0 = - grnorm
 
+            if self._parms.verbosity == 1:
+                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(self._iters, f0, t_it), end='\r', flush=True)
+
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
+                print('iteration: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
                 print('\tdirectional derivative: {:.2f}'.format(df0))
 
@@ -456,8 +459,8 @@ class RCG():
                 # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
                 return fn, gn, dn
 
-            ls_results = ls(cost_and_grad, x, d, f0, df0, gr)
-
+            # ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, fold, ls_pars=self._ls_pars)
+            ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, ls_pars=self._ls_pars)
             alpha = ls_results.a_k
             stepsize = jnp.abs(alpha * df0)
             newx = self.man.retraction(x, alpha * d)
@@ -483,6 +486,7 @@ class RCG():
             grnorm = newgrnorm
 
             self._iters += 1
+            t_it = time.time() - t_st
 
             if self._parms.logverbosity:
                 logs = logs._replace(
@@ -493,7 +497,7 @@ class RCG():
                     gev=jnp.append(logs.gev, self._gradev),
                     it=jnp.append(logs.it, self._iters),
                     stepsize=jnp.append(logs.stepsize, stepsize),
-                    time=jnp.append(logs.time, time.time() - t_start)
+                    time=jnp.append(logs.time, t_it)
                     )
 
         result = OptimizerResult(
@@ -513,6 +517,7 @@ class RCG():
             )
 
         if self._parms.verbosity >= 1:
+            print('')
             result.pprint()
         
         if self._parms.logverbosity:

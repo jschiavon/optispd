@@ -280,7 +280,10 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
     return state
 
 
-def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, ls_pars):
+def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, fold=None, ls_pars=None):
+
+    if ls_pars is None:
+        ls_pars = LineSearchParameter()
 
     # Wolfe conditions
     def wolfe_one(ai, fi):
@@ -308,12 +311,17 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, ls_pars):
     if ls_pars.ls_verbosity >= 1:
         print('\tStarting linesearch...')
 
+    if (fold is None) or jnp.isinf(fold):
+        initial_step_length = ls_pars.ls_initial_step
+    else:
+        initial_step_length = 2 * (f0 - fold) / df0
+
     while ((~state.done) & (state.i <= ls_pars.ls_maxiter) & (~state.failed)):
         # no amax in this version, we just double as in scipy.
         # unlike original algorithm we do our choice at the start of this loop
         ai = jnp.where(
             state.i == 1,
-            ls_pars.ls_initial_step,
+            initial_step_length,
             state.ai * ls_pars.ls_optimism
             )
         # if ai <= 0 then something went wrong. In practice any

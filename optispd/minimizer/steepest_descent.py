@@ -294,9 +294,6 @@ class RSD():
             self._gradev += 1
             return self.man.egrad2rgrad(x, gradient(x))
 
-        def ls(c_a_g, x, d, f0, df0, g0):
-            return wolfe_linesearch(c_a_g, x, d, f0, df0, g0, self._ls_pars)
-
         if x is None:
             try:
                 x = self.man.rand(key)
@@ -358,7 +355,7 @@ class RSD():
                 # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
                 return fn, gn, dn
 
-            ls_results = ls(cost_and_grad, x, d, f0, df0, gr)
+            ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, fold, ls_pars=self._ls_pars)
 
             alpha = ls_results.a_k
             stepsize = jnp.abs(alpha * df0)
