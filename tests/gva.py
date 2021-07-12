@@ -144,13 +144,13 @@ man = Product(Euclidean(p), SPD(p))
 func_full = jit(lambda x: func(x[0], x[1]))
 grad_full = jit(lambda x: [grad_mu(x[0], x[1]), grad_si(x[0], x[1])])
 
-# rng, key = random.split(rng)
-# startsig = random.normal(key, shape=(p, p))
-# startsig = startsig @ startsig.T
-# rng, key = random.split(rng)
-# startmu = random.normal(key, shape=(p,))
-startmu = jnp.ones(shape=(p,))
-startsig = jnp.identity(p)
+rng, key = random.split(rng)
+startsig = random.normal(key, shape=(p, p))
+startsig = startsig @ startsig.T
+rng, key = random.split(rng)
+startmu = random.normal(key, shape=(p,))
+# startmu = jnp.ones(shape=(p,))
+# startsig = jnp.identity(p)
 
 initval = [startmu, startsig]
 
@@ -308,16 +308,16 @@ for i in range(p):
 print("\tEstimated Sigma:")
 print_matrix(res_riem.x[1])
 
-print("Stepwise Riemannian:")
-print("\tTime spent {:.2f} s".format(spent_riem))
-print("\tIterations {}".format(k))
-print("\tTime per iteration {}".format(spent_riem / k))
-print("\tFinal loglik {:.5e}".format(f0))
-print("\tTrue beta ---- Estimated mu (diff: {:.2f}):".format(jnp.linalg.norm(beta - mu)))
-for i in range(p):
-    print("\t\t{:.2e} ---- {:.2e}".format(beta[i], mu[i]))
-print("\tEstimated Sigma:")
-print_matrix(sig)
+# print("Stepwise Riemannian:")
+# print("\tTime spent {:.2f} s".format(spent_riem))
+# print("\tIterations {}".format(k))
+# print("\tTime per iteration {}".format(spent_riem / k))
+# print("\tFinal loglik {:.5e}".format(f0))
+# print("\tTrue beta ---- Estimated mu (diff: {:.2f}):".format(jnp.linalg.norm(beta - mu)))
+# for i in range(p):
+#     print("\t\t{:.2e} ---- {:.2e}".format(beta[i], mu[i]))
+# print("\tEstimated Sigma:")
+# print_matrix(sig)
 
 print("Cholesky:")
 print("\tTime spent {:.2f} s".format(toc - tic))
@@ -333,7 +333,7 @@ print_matrix(sig_chol)
 
 fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12,12))
 ax[0].plot(logs.it, jnp.sign(logs.fun) * jnp.log10(jnp.abs(logs.fun)))
-ax[0].plot(range(k+1), jnp.sign(lls) * jnp.log10(jnp.abs(lls)))
+# ax[0].plot(range(k+1), jnp.sign(lls) * jnp.log10(jnp.abs(lls)))
 # ax[0].set_yticks([-2, 0, 2, 4])
 # ax[0].set_yticklabels([r'$10^{-2}$', r'$10^{0}$', r'$10^{2}$', r'$10^{4}$'])
 ax[0].set_ylabel('Loglikelihood')
