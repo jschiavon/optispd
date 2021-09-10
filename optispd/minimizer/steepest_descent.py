@@ -23,6 +23,7 @@ SOFTWARE.
 
 import time
 import jax.numpy as jnp
+from jax import value_and_grad
 from typing import NamedTuple, Union
 from .linesearch import wolfe_linesearch, LineSearchParameter
 
@@ -253,7 +254,7 @@ class RSD():
             raise ValueError("A wild nan appeared, iteration {}".format(self._iters))
         return status
 
-    def solve(self, objective, gradient, x=None, key=None):
+    def solve(self, objective, gradient=None, x=None, key=None, natural_gradient=False):
         """
         Perform optimization using gradient descent with linesearch.
 
@@ -283,16 +284,24 @@ class RSD():
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
 
+        t_start = time.time()
+
         self._costev = 0
         self._gradev = 0
 
-        def cost(x):
-            self._costev += 1
-            return objective(x)
+        if ~natural_gradient:
+            def cost_and_grad(x):
+                self._costev += 1
+                self._gradev += 1
+                c, g = value_and_grad(objective)(x)
+                return c, self.man.proj(x, self.man.egrad2rgrad(x, g))
+        else:
+            def cost_and_grad(x):
+                self._costev += 1
+                self._gradev += 1
+                c, g = value_and_grad(objective)(x)
+                return c, self.man.proj(x, g)
 
-        def grad(x):
-            self._gradev += 1
-            return self.man.egrad2rgrad(x, gradient(x))
 
         if x is None:
             try:
@@ -304,15 +313,15 @@ class RSD():
 
         self._iters = 0
         stepsize = 1.
-        f0 = cost(x)
+        f0, gr = cost_and_grad(x)
         fold = jnp.inf
-        gr = grad(x)
+        aold = None
+        dfold = None
         grnorm = self.man.norm(x, gr)
         d = - gr
         df0 = self.man.inner(x, d, gr)
         # df0 = -jnp.sqrt(jnp.abs(df0)) if df0 < 0 else jnp.sqrt(df0)
 
-        t_start = time.time()
         if self._parms.logverbosity:
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
@@ -326,9 +335,16 @@ class RSD():
                 time=jnp.array([time.time() - t_start])
                 )
 
+        t_it = time.time() - t_start
+        
         while True:
+            t_st = time.time()
+            
+            if self._parms.verbosity == 1:
+                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(self._iters, f0, t_it), end='\r', flush=True)
+
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
+                print('iteration: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
                 print('\tgrad norm: {:.2f}'.format(grnorm))
                 print('\tdirectional derivative: {:.2f}'.format(df0))
 
@@ -347,15 +363,15 @@ class RSD():
             if status >= 0:
                 break
 
-            def cost_and_grad(t):
+            def c_and_g(t):
                 xnew = self.man.retraction(x, t * d)
-                fn = cost(xnew)
-                gn = grad(xnew)
+                fn, gn = cost_and_grad(xnew)
                 dn = self.man.inner(xnew, - gn, gn)
                 # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
                 return fn, gn, dn
 
-            ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, fold, ls_pars=self._ls_pars)
+            ls_results = wolfe_linesearch(c_and_g, x, d, f0, df0, gr, aold=aold, dfold=dfold, ls_pars=self._ls_pars)
+            #ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, ls_pars=self._ls_pars)
 
             alpha = ls_results.a_k
             stepsize = jnp.abs(alpha * df0)
@@ -364,10 +380,16 @@ class RSD():
             f0 = ls_results.f_k
             gr = ls_results.g_k
             grnorm = self.man.norm(x, gr)
+
+            aold = alpha
+            dfold = df0
+
             d = - gr
             df0 = self.man.inner(x, d, gr)
-            # df0 = -jnp.sqrt(jnp.abs(df0)) if df0 < 0 else jnp.sqrt(df0)
+            
             self._iters  += 1
+            t_it = time.time() - t_st
+
             if self._parms.verbosity >= 2:
                 print('\talpha: {}'.format(alpha))
 
@@ -380,7 +402,7 @@ class RSD():
                     gev=jnp.append(logs.gev, self._gradev),
                     it=jnp.append(logs.it, self._iters),
                     stepsize=jnp.append(logs.stepsize, stepsize),
-                    time=jnp.append(logs.time, time.time() - t_start)
+                    time=jnp.append(logs.time, t_it)
                     )
 
         result = OptimizerResult(
@@ -399,7 +421,7 @@ class RSD():
                 time=(time.time() - t_start)
                 )
         
-        if self._parms.verbosity >= 1:
+        if self._parms.verbosity >= 2:
             result.pprint()
         
         if self._parms.logverbosity:

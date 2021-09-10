@@ -23,6 +23,7 @@ SOFTWARE.
 
 import time
 import jax.numpy as jnp
+from jax import value_and_grad
 from typing import NamedTuple, Union
 from .linesearch import wolfe_linesearch, LineSearchParameter
 
@@ -57,7 +58,7 @@ class OptimizerParams(NamedTuple):
     tol: Union[float, jnp.ndarray] = 1e-6
     minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
-    betamethod: str = "hestenesstiefel"
+    betamethod: str = "polakribiere"
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
 
@@ -188,7 +189,7 @@ def _precon(x, g):
 def _betachoice(method, manifold):
     if method == 'hagerzhang':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, gr, d)
+            oldgr = manifold.parallel_transport(x, newx, gr)
             diff = newgr - oldgr
             deno = manifold.inner(newx, diff, newd)
             numo = manifold.inner(newx, diff, newgr)
@@ -202,7 +203,7 @@ def _betachoice(method, manifold):
             return beta
     elif method == 'hybridhsdy':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, gr, d)
+            oldgr = manifold.parallel_transport(x, newx, gr)
             diff = newgr - oldgr
             deno = manifold.inner(newx, diff, newd)
             numeHS = manifold.inner(newx, diff, newgr)
@@ -215,14 +216,14 @@ def _betachoice(method, manifold):
                 manifold.inner(x, gr, gr)
     elif method == 'polakribiere':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, gr, d)
+            oldgr = manifold.parallel_transport(x, newx, gr)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
             grinn = manifold.inner(x, gr, gr)
             return max(0, ip_diff / grinn)
     elif method == 'hestenesstiefel':
         def compute_beta(x, newx, gr, newgr, d, newd):
-            oldgr = manifold.vector_transport(x, gr, d)
+            oldgr = manifold.parallel_transport(x, newx, gr)
             diff = newgr - oldgr
             ip_diff = manifold.inner(newx, newgr, diff)
             den_dif = manifold.inner(newx, diff, newd)
@@ -340,7 +341,7 @@ class RCG():
             raise ValueError("A wild nan appeared, iteration {}".format(self._iters))
         return status
 
-    def solve(self, objective, gradient, x=None, key=None):
+    def solve(self, objective, gradient=None, x=None, key=None, natural_gradient=False):
         """
         Perform optimization using conjugate gradient method.
 
@@ -376,13 +377,18 @@ class RCG():
             self.man
             )
 
-        def cost(x):
-            self._costev += 1
-            return objective(x)
-
-        def grad(x):
-            self._gradev += 1
-            return self.man.egrad2rgrad(x, gradient(x))
+        if ~natural_gradient:
+            def cost_and_grad(x):
+                self._costev += 1
+                self._gradev += 1
+                c, g = value_and_grad(objective)(x)
+                return c, self.man.proj(x, self.man.egrad2rgrad(x, g))
+        else:
+            def cost_and_grad(x):
+                self._costev += 1
+                self._gradev += 1
+                c, g = value_and_grad(objective)(x)
+                return c, self.man.proj(x, g)
 
         if x is None:
             try:
@@ -394,9 +400,10 @@ class RCG():
 
         self._iters = 0
         stepsize = 1.
-        f0 = cost(x)
+        f0, gr = cost_and_grad(x)
         fold = jnp.inf
-        gr = grad(x)
+        aold = None
+        dfold = None
         grnorm = self.man.norm(x, gr)
 
         d = - gr
@@ -417,9 +424,9 @@ class RCG():
                 )
 
         while True:
-            df0 = self.man.inner(x, gr, d)
             t_st = time.time()
-
+            
+            df0 = self.man.inner(x, gr, d)
             if df0 >= 0:
                 if self._parms.verbosity >= 2:
                     print("Conjugate gradient info: got an ascent direction "
@@ -451,23 +458,22 @@ class RCG():
             if (status >= 0):
                 break
 
-            def cost_and_grad(t):
+            def c_and_g(t):
                 xnew = self.man.retraction(x, t * d)
-                fn = cost(xnew)
-                gn = grad(xnew)
+                fn, gn = cost_and_grad(xnew)
                 dn = self.man.inner(xnew, - gn, gn)
                 # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
                 return fn, gn, dn
 
-            # ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, fold, ls_pars=self._ls_pars)
-            ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, ls_pars=self._ls_pars)
+            ls_results = wolfe_linesearch(c_and_g, x, d, f0, df0, gr, aold=aold, dfold=dfold, ls_pars=self._ls_pars)
+            # ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, ls_pars=self._ls_pars)
             alpha = ls_results.a_k
             stepsize = jnp.abs(alpha * df0)
             newx = self.man.retraction(x, alpha * d)
             newf = ls_results.f_k
             newgr = ls_results.g_k
             newgrnorm = self.man.norm(newx, newgr)
-            newd = self.man.vector_transport(x, d, alpha * d)
+            newd = self.man.parallel_transport(x, newx, alpha * d)
 
             beta = self.compute_beta(x, newx, gr, newgr, alpha * d, newd)
             if jnp.isnan(beta):
@@ -484,6 +490,8 @@ class RCG():
             f0 = newf
             gr = newgr
             grnorm = newgrnorm
+            aold = alpha
+            dfold = df0
 
             self._iters += 1
             t_it = time.time() - t_st
@@ -516,8 +524,7 @@ class RCG():
             time=(time.time() - t_start)
             )
 
-        if self._parms.verbosity >= 1:
-            print('')
+        if self._parms.verbosity >= 2:
             result.pprint()
         
         if self._parms.logverbosity:

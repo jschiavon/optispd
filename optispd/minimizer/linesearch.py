@@ -179,7 +179,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
     delta2 = 0.1
 
     if pars.ls_verbosity >= 3:
-        print('\t\tstarting zoom between {} and {}'.format(
+        print('\t\tstarting zoom between {:.2e} and {:.2e}'.format(
             state.a_lo, state.a_hi))
 
     while bool((~state.done) & (~state.failed)):
@@ -190,10 +190,10 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         qchk = delta2 * dalpha
 
         state = state._replace(
-            failed=state.failed or dalpha <= 1e-8
+            failed=state.failed or jnp.isclose(b, a, rtol=1e-5)
             )
         if pars.ls_verbosity >= 4:
-            print('\t\t\titer {}, alpha between {} and {}'.format(
+            print('\t\t\titer {}, alpha between {:.2e} and {:.2e}'.format(
                 state.j, state.a_lo, state.a_hi))
 
         # Cubicmin is sometimes nan,
@@ -217,9 +217,9 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
             ngev=state.ngev + 1
             )
         if pars.ls_verbosity >= 4:
-            print('\t\t\ta_j={} -> f_j {:.1f}, f_lo {:.1f}, Wolfe1: {}'.format(
+            print('\t\t\t  - a_j={:.2e} -> f_j {:.2e}, f_lo {:.2e}, Wolfe1: {}'.format(
                 a_j, f_j, state.f_lo, wolfe_one(a_j, f_j)))
-            print('\t\t\t  df_j {:.1f}, df_lo {:.1f}, Wolfe2: {}'.format(
+            print('\t\t\t  - df_j {:.2e}, df_lo {:.2e}, Wolfe2: {}'.format(
                 df_j, state.df_lo, wolfe_two(df_j)))
 
         if wolfe_one(a_j, f_j) | (f_j >= state.f_lo):
@@ -280,7 +280,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
     return state
 
 
-def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, fold=None, ls_pars=None):
+def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=None, ls_pars=None):
 
     if ls_pars is None:
         ls_pars = LineSearchParameter()
@@ -311,10 +311,19 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, fold=None, ls_pars=None):
     if ls_pars.ls_verbosity >= 1:
         print('\tStarting linesearch...')
 
-    if (fold is None) or jnp.isinf(fold):
-        initial_step_length = ls_pars.ls_initial_step
+    if (aold is not None) and (dfold is not None):
+        alpha_0 = aold * dfold / df0
+        initial_step_length = alpha_0
+        # initial_step_length = jnp.where(alpha_0 > ls_pars.ls_initial_step,
+        #                                 ls_pars.ls_initial_step,
+        #                                 alpha_0)
+    elif (fold is not None) and (~jnp.isinf(fold)):
+        alpha_0 = 2 * jnp.abs(f0 - fold) / jnp.abs(df0)
+        initial_step_length = jnp.where(alpha_0 > ls_pars.ls_initial_step,
+                                        ls_pars.ls_initial_step,
+                                        alpha_0)
     else:
-        initial_step_length = 2 * (f0 - fold) / df0
+        initial_step_length = ls_pars.ls_initial_step
 
     while ((~state.done) & (state.i <= ls_pars.ls_maxiter) & (~state.failed)):
         # no amax in this version, we just double as in scipy.
@@ -341,8 +350,8 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, fold=None, ls_pars=None):
             )
 
         if ls_pars.ls_verbosity >= 2:
-            print("\titer: {}\n\t\talpha: {:.2f} "
-                  "f(alpha): {:.2f}".format(state.i, ai, fi))
+            print("\titer: {}\n\t\talpha: {:.2e} "
+                  "f(alpha): {:.5e}".format(state.i, ai, fi))
 
         if wolfe_one(ai, fi) or ((fi > state.fi) and state.i > 1):
             if ls_pars.ls_verbosity >= 2:
@@ -415,7 +424,7 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, fold=None, ls_pars=None):
         nfev=state.nfev,
         ngev=state.ngev,
         k=state.i,
-        a_k=state.a_star,
+        a_k=state.ai if status==1 else state.a_star,
         f_k=state.f_star,
         g_k=state.g_star,
         status=status,

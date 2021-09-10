@@ -21,10 +21,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+available_algorithms = ['rgd', 'rcg', 'rlbfgs', 'rsgdm']
+_msg = "The selected method is not available yet. Please use one of {}".format(" ".join(available_algorithms))
 
-def minimizer(man, method='rsd', **pars):
+def minimizer(man, method='rgd', **pars):
     """Thin wrapper for optimization algorithms on manifold."""
-    if method == 'rsd':
+    if method == 'rgd':
         from .steepest_descent import RSD as _rsd
         return _rsd(man, **pars)
     elif method == 'rcg':
@@ -33,9 +35,12 @@ def minimizer(man, method='rsd', **pars):
     elif method == 'rlbfgs':
         from .l_bfgs import RL_BFGS as _rlbfgs
         return _rlbfgs(man, **pars)
+    elif method == 'rsgdm':
+        raise NotImplementedError("rsgdm is not implemented yet")
+        from .gradient_descent_momentum import RSGDM as _rsgdm
+        return _rsgdm(man, **pars)
     else:
-        raise NotImplementedError("The selected method is not available yet. "
-                                  "Please use one of `rsd` or `rcg`")
+        raise NotImplementedError(_msg)
 
 
 from .linesearch import wolfe_linesearch, LineSearchParameter
