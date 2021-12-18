@@ -22,8 +22,8 @@ SOFTWARE.
 """
 
 import jax.numpy as jnp
-from jax import jit, random, partial, vmap
-from jax.ops import index_update
+import jax
+from functools import partial
 
 
 class Euclidean():
@@ -34,7 +34,7 @@ class Euclidean():
         assert isinstance(n, (int, jnp.integer)), "n must be an integer"
         self._n = n
         name = ("R^{}").format(n)
-        self._dimension = jnp.int_(n * (n + 1) / 2)
+        self._dimension = n
         self._name = name
         self._approximated = approx
 
@@ -47,53 +47,63 @@ class Euclidean():
         """Return manifold dimension."""
         return self._dimension
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def inner(self, X, U, W):
         """Return inner product on the manifold."""
         return jnp.dot(U, W)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def norm(self, X, W):
         """Compute norm of tangent vector `W` in tangent space at `X`."""
-        return jnp.linalg.norm(W)
+        return jnp.linalg.norm(W, ord=2)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def rand(self, key):
         """Return a random point on the manifold."""
-        return random.normal(key, shape=(self._n,))
+        return jax.random.normal(key, shape=(self._n,))
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def randvec(self, key, X):
         """Return a random vector on the tangent space at `X`."""
-        Y = random.normal(key, shape=(self._n,))
+        Y = jax.random.normal(key, shape=(self._n,))
         return Y / self.norm(X, Y)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def dist(self, X, Y):
         """Return geodesic distance between `X` and `Y`."""
         return jnp.linalg.norm(X - Y)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def proj(self, X, Y):
         """Return projection of `Y` to the tangent space in `X`."""
         return Y
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def egrad2rgrad(self, X, G):
         """Map the Euclidean gradient `G` to the tangent space at `X`."""
         return G
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0, 1))
+    def value_and_grad(self, fun, X):
+        """
+        Convenience wrapper around value_and_grad that
+        performs the riemannian projection.
+        """
+        f_x, g_x = jax.value_and_grad(fun)(X)
+        g_x = self.proj(X, self.egrad2rgrad(X, g_x))
+        return f_x, g_x
+
+    @partial(jax.jit, static_argnums=(0))
     def exp(self, X, U):
         """Compute the exponential map of tangent vector `U` at `X`."""
         return X + U
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def retraction(self, X, U):
         """Compute retraction from point `X` along vector `U`."""
         return self.exp(X, U)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def log(self, X, Y):
         """
         Compute the logarithm of `Y` at `X`.
@@ -102,7 +112,7 @@ class Euclidean():
         """
         return Y - X
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def parallel_transport(self, X, Y, U):
         """
         Compute the parallel transport from `X` to `Y`.
@@ -112,8 +122,8 @@ class Euclidean():
         """
         return U
 
-    @partial(jit, static_argnums=(0))
-    def vector_transport(self, X, U, V):
+    @partial(jax.jit, static_argnums=(0))
+    def vector_transport(self, X, W, U):
         """
         Compute the vector transport from `X` in direction `W`.
 

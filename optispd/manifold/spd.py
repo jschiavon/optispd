@@ -22,34 +22,40 @@ SOFTWARE.
 """
 
 import jax.numpy as jnp
-from jax import jit, random, partial, vmap
-from jax.ops import index_update
+import jax
+from functools import partial
 
-@jit
+
+@jax.jit
 def _logm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, jnp.log(w), v)
 
-@jit
+@jax.jit
 def _sqrtm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, jnp.sqrt(w), v)
 
-@jit
+@jax.jit
 def _isqrtm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, 1. / jnp.sqrt(w), v)
 
-@jit
+@jax.jit
+def _sqrtmi(X):
+    w, v = jnp.linalg.eigh(X)
+    sqrtx = jnp.einsum('...ij,...j,...lj', v, jnp.sqrt(w), v)
+    isqrtx = jnp.einsum('...ij,...j,...lj', v, 1. / jnp.sqrt(w), v)
+    return sqrtx, isqrtx
+
+@jax.jit
 def _expm(X):
     w, v = jnp.linalg.eigh(X)
     return jnp.einsum('...ij,...j,...lj', v, jnp.exp(w), v)
 
 
-@jit
-def _multitransp(X):
-    return jnp.swapaxes(X, -2, -1)
-
+_multitransp = jax.jit(lambda x: jnp.swapaxes(x, -2, -1))
+_triple = jax.jit(lambda x, y, z: jnp.einsum('...ij,...jk,...kl', x, y, z))
 
 class SPD():
     """Manifold of (p x p) symmetric positive definite matrix."""
@@ -79,7 +85,7 @@ class SPD():
         """Return dimension of the manifold."""
         return self._dimension
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def inner(self, X, U, W):
         """
         Return inner product on the manifold.
@@ -96,35 +102,36 @@ class SPD():
             return jnp.sum(inn)
         return inn
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def norm(self, X, W):
         """Compute norm of tangent vector `W` in tangent space at `X`."""
-        iX = _isqrtm(X)
-        mid = jnp.einsum('...ij,...jk,...lk', iX, W, iX)
+        # iX = _isqrtm(X)
+        # mid = jnp.einsum('...ij,...jk,...lk', iX, W, iX)
+        mid = jnp.linalg.solve(X, W)
         nrm = jnp.linalg.norm(mid, axis=(-2, -1))
         if self._m > 1:
             return jnp.sqrt(jnp.sum(nrm * nrm))
         return nrm
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def rand(self, key):
         """Return a random point on the manifold."""
         if self._m == 1:
-            A = random.normal(key, shape=(self._p, self._p))
+            A = jax.random.normal(key, shape=(self._p, self._p))
         else:
-            A = random.normal(key, shape=(self._m, self._p, self._p))
+            A = jax.random.normal(key, shape=(self._m, self._p, self._p))
         return jnp.einsum('...ij,...kj', A, A)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def randvec(self, key, X):
         """Return a random vector on the tangent space at `X`."""
         if self._m == 1:
-            A = random.normal(key, shape=(self._p, self._p))
+            A = jax.random.normal(key, shape=(self._p, self._p))
         else:
-            A = random.normal(key, shape=(self._m, self._p, self._p))
+            A = jax.random.normal(key, shape=(self._m, self._p, self._p))
         return self.proj(X, A)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def dist(self, X, Y):
         """Return geodesic distance between `X` and `Y`."""
         iX = _isqrtm(X)
@@ -134,12 +141,12 @@ class SPD():
             return jnp.sqrt(jnp.sum(d * d))
         return d
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def proj(self, X, Y):
         """Return projection of `Y` to the tangent space in `X`."""
         return (Y + _multitransp(Y)) / 2
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def egrad2rgrad(self, X, G):
         """
         Map the Euclidean gradient `G` to the tangent space at `X`.
@@ -149,19 +156,30 @@ class SPD():
         """
         return jnp.einsum('...ij,...jk,...kl', X, self.proj(X, G), X)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0, 1))
+    def value_and_grad(self, fun, X):
+        """
+        Convenience wrapper around value_and_grad that
+        performs the riemannian projection.
+        """
+        f_x, g_x = jax.value_and_grad(fun)(X)
+        g_x = self.proj(X, self.egrad2rgrad(X, g_x))
+        return f_x, g_x
+    
+    @partial(jax.jit, static_argnums=(0))
     def exp(self, X, U):
         """Compute the exponential map of tangent vector `U` at `X`."""
-        iX = _isqrtm(X)
-        mid = jnp.einsum('...ij,...jk,...lk', iX, U, iX)        
-        return jnp.matmul(X, _expm(mid))
+        Xhalf, iXhalf = _sqrtmi(X)
+        mid = jnp.einsum('...ij,...jk,...lk', iXhalf, U, iXhalf)
+        return jnp.einsum('...ij,...jk,...kl', Xhalf, _expm(mid), Xhalf)
+        
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def secondorder_exp(self, X, U):
         """Approximate the exponential map of a tangent vector `U` at `X`."""
         return X + U + jnp.matmul(U, jnp.linalg.solve(X, U)) / 2
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def retraction(self, X, U):
         """Compute retraction from point `X` along vector `U`."""
         if self._approximated:
@@ -169,20 +187,18 @@ class SPD():
         else:
             return self.exp(X, U)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def log(self, X, Y):
         """
         Compute the logarithm of `Y` at `X`.
 
         This is the inverse of the exponential map `exp`.
         """
-        w, v = jnp.linalg.eigh(X)
-        Xhalf = jnp.einsum('...ij,...j,...lj', v, jnp.sqrt(w), v)
-        iXhalf = jnp.einsum('...ij,...j,...lj', v, 1 / jnp.sqrt(w), v)
+        Xhalf, iXhalf = _sqrtmi(X)
         mid = jnp.einsum('...ij,...jk,...lk', iXhalf, Y, iXhalf)
         return jnp.einsum('...ij,...jk,...lk', Xhalf, _logm(mid), Xhalf)
 
-    @partial(jit, static_argnums=(0))
+    @partial(jax.jit, static_argnums=(0))
     def parallel_transport(self, X, Y, U):
         """
         Compute the parallel transport from `X` to `Y`.
@@ -194,23 +210,33 @@ class SPD():
         E = _sqrtm(jnp.einsum('...ij,...jk,...lk', iX, Y, iX))
         return jnp.einsum('...ij,...jk,...lk', E, U, E)
 
-    @partial(jit, static_argnums=(0))
-    def vtransport(self, X, U, W):
+    @partial(jax.jit, static_argnums=(0))
+    def vtransport(self, X, W, U):
         """
         Compute the vector transport from `X` in direction `W`.
 
         This transport parallely vector `U` in the tangent space at `X`
         to its corresponding vector along the direction given by vector `W`.
         """
-        Xhalf = _sqrtm(X)
-        iXhalf = jnp.linalg.inv(Xhalf)
-        E = jnp.einsum('...ij,...jk,...kl', iXhalf, W, iXhalf)
-        E = jnp.einsum('...ij,...jk', _expm(E/2), Xhalf)
-        E1 = jnp.einsum('...ij,...jk,...kl', iXhalf, U, iXhalf)
-        return jnp.einsum('...ji,...jk,...kl', E, E1, E)
+        iX = jnp.linalg.inv(X)
+        gt2 = self.retraction(X, 0.5 * W)
+        return jnp.einsum(
+            '...ij,...jk,...kl,...lm,...mn',
+            gt2,
+            iX,
+            U,
+            iX,
+            gt2
+        )
+        # Xhalf = _sqrtm(X)
+        # iXhalf = jnp.linalg.inv(Xhalf)
+        # E = jnp.einsum('...ij,...jk,...kl', iXhalf, W, iXhalf)
+        # E = jnp.einsum('...ij,...jk', _expm(E/2), Xhalf)
+        # E1 = jnp.einsum('...ij,...jk,...kl', iXhalf, U, iXhalf)
+        # return jnp.einsum('...ji,...jk,...kl', E, E1, E)
 
-    @partial(jit, static_argnums=(0))
-    def secondorder_vtransport(self, X, U, W):
+    @partial(jax.jit, static_argnums=(0))
+    def secondorder_vtransport(self, X, W, U):
         """
         Compute vector transport from `X` in direction `W`.
 
@@ -220,32 +246,30 @@ class SPD():
         This function is the second order approximation
         of the vector transport.
         """
-        iX = jnp.linalg.inv(X)
-        A = 0.5 * jnp.matmul(iX, W)
-        AA = 0.5 * jnp.matmul(A, A)
+        XW = jnp.linalg.solve(X, W)
+        XU = jnp.linalg.solve(X, U)
+        one = _triple(U, XW, XW)
+        two = _triple(W, XU, XW)
+        thr = _triple(W, XW, XU)
 
-        UA = jnp.matmul(U, A)
-        AUA = jnp.einsum('...ji,...jk', A, UA)
-        UAA = jnp.matmul(U, AA)
-
-        first_order = UA + _multitransp(UA)
-        second_order = AUA + UAA + _multitransp(UAA)
-
-        return U + first_order + second_order
-
-    @partial(jit, static_argnums=(0))
-    def vector_transport(self, X, U, W):
+        first_order = self.proj(X, jnp.matmul(U, XW))
+        second_order = (one + two + thr)
+        return U + first_order + second_order / 4
+        
+        
+    @partial(jax.jit, static_argnums=(0))
+    def vector_transport(self, X, W, U):
         """
         Compute the vector transport from `X` in direction `W`.
 
         This transport parallely vector `U` in the tangent space at `X`
         to its corresponding vector along the direction given by vector `W`.
         """
-        # if self._approximated:
+        if self._approximated:
+            return self.secondorder_vtransport(X, W, U)
+        else:
+            return self.vtransport(X, W, U)
+        # if self._p > 5:
         #     return self.secondorder_vtransport(X, U, W)
         # else:
         #     return self.vtransport(X, U, W)
-        if self._p > 5:
-            return self.secondorder_vtransport(X, U, W)
-        else:
-            return self.vtransport(X, U, W)

@@ -22,8 +22,9 @@ SOFTWARE.
 """
 
 import jax.numpy as jnp
-from jax import jit, random, partial, vmap
-from jax.ops import index_update
+import jax
+from functools import partial
+from typing import Tuple, Iterable
 
 
 class Product():
@@ -51,19 +52,19 @@ class Product():
     def inner(self, X, G, H):
         arr = jnp.zeros(self._len_man)
         for k, man in enumerate(self._man):
-            arr = index_update(arr, k, man.inner(X[k], G[k], H[k]))
+            arr = arr.at[k].set(man.inner(X[k], G[k], H[k]))
         return jnp.sum(arr)
 
     def norm(self, X, G):
         arr = jnp.zeros(self._len_man)
         for k, man in enumerate(self._man):
-            arr = index_update(arr, k, man.norm(X[k], G[k]))
+            arr = arr.at[k].set(man.norm(X[k], G[k]))
         return jnp.sum(arr)
 
     def dist(self, X, Y):
         arr = jnp.zeros(self._len_man)
         for k, man in enumerate(self._man):
-            arr = index_update(arr, k, man.dist(X[k], Y[k]))
+            arr = arr.at[k].set(man.dist(X[k], Y[k]))
         return jnp.sqrt(jnp.sum(arr * arr))
 
     def proj(self, X, U):
@@ -73,6 +74,11 @@ class Product():
     def egrad2rgrad(self, X, G):
         return _ProductTangentVector(
             [man.egrad2rgrad(X[k], G[k]) for k, man in enumerate(self._man)])
+
+    def value_and_grad(self, fun, X):
+        f_x, g_x = jax.value_and_grad(fun)(X)
+        g_x = self.proj(X, self.egrad2rgrad(X, g_x))
+        return f_x, g_x
 
     def exp(self, X, U):
         return tuple(
@@ -87,12 +93,12 @@ class Product():
             [man.log(X[k], U[k]) for k, man in enumerate(self._man)])
 
     def rand(self, key):
-        key = random.split(key, self._len_man)
+        key = jax.random.split(key, self._len_man)
         return tuple(
             [man.rand(key[k]) for k, man in enumerate(self._man)])
 
     def randvec(self, key, X):
-        key = random.split(key, self._len_man)
+        key = jax.random.split(key, self._len_man)
         return _ProductTangentVector(
             [man.rand(key[k], X[k]) for k, man in enumerate(self._man)])
 
@@ -101,7 +107,7 @@ class Product():
             [man.parallel_transport(X[k], Y[k], U[k])
                 for k, man in enumerate(self._man)])
 
-    def vector_transport(self, X, U, W):
+    def vector_transport(self, X, W, U):
         return _ProductTangentVector(
             [man.vector_transport(X[k], U[k], W[k])
                 for k, man in enumerate(self._man)])
@@ -131,3 +137,21 @@ class _ProductTangentVector(list):
 
     def __neg__(self):
         return _ProductTangentVector([-val for val in self])
+
+
+def _flatten_ProductTangentVector(container) -> Tuple[Iterable[int], str]:
+  """Returns an iterable over _ProductTangentVector contents, and aux data."""
+  flat_contents = list(container)
+
+  aux_data = None
+  return flat_contents, aux_data
+
+
+def _unflatten_ProductTangentVector(
+        aux_data: str, flat_contents: Iterable[int]) -> _ProductTangentVector:
+  """Converts aux data and the flat contents into a _ProductTangentVector."""
+  return _ProductTangentVector(flat_contents)
+
+
+jax.tree_util.register_pytree_node(
+    _ProductTangentVector, _flatten_ProductTangentVector, _unflatten_ProductTangentVector)
