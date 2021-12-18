@@ -22,6 +22,7 @@ SOFTWARE.
 """
 
 import jax.numpy as jnp
+from jax import lax
 from typing import NamedTuple, Union
 
 
@@ -89,16 +90,15 @@ class _LineSearchState(NamedTuple):
     done: Union[bool, jnp.ndarray]
     failed: Union[bool, jnp.ndarray]
     i: Union[int, jnp.ndarray]
-    ai: Union[float, jnp.ndarray]
-    fi: Union[float, jnp.ndarray]
-    dfi: Union[float, jnp.ndarray]
+    a_i1: Union[float, jnp.ndarray]
+    phi_i1: Union[float, jnp.ndarray]
+    dphi_i1: Union[float, jnp.ndarray]
     nfev: Union[int, jnp.ndarray]
     ngev: Union[int, jnp.ndarray]
     a_star: Union[float, jnp.ndarray]
-    f_star: Union[float, jnp.ndarray]
-    df_star: Union[float, jnp.ndarray]
-    g_star: Union[list, jnp.ndarray]
-    saddle_point: Union[bool, jnp.ndarray]
+    phi_star: Union[float, jnp.ndarray]
+    dphi_star: Union[float, jnp.ndarray]
+    g_star: jnp.ndarray
 
 
 class _ZoomState(NamedTuple):
@@ -106,17 +106,17 @@ class _ZoomState(NamedTuple):
     failed: Union[bool, jnp.ndarray]
     j: Union[int, jnp.ndarray]
     a_lo: Union[float, jnp.ndarray]
-    f_lo: Union[float, jnp.ndarray]
-    df_lo: Union[float, jnp.ndarray]
+    phi_lo: Union[float, jnp.ndarray]
+    dphi_lo: Union[float, jnp.ndarray]
     a_hi: Union[float, jnp.ndarray]
-    f_hi: Union[float, jnp.ndarray]
-    df_hi: Union[float, jnp.ndarray]
+    phi_hi: Union[float, jnp.ndarray]
+    dphi_hi: Union[float, jnp.ndarray]
     a_rec: Union[float, jnp.ndarray]
-    f_rec: Union[float, jnp.ndarray]
+    phi_rec: Union[float, jnp.ndarray]
     a_star: Union[float, jnp.ndarray]
-    f_star: Union[float, jnp.ndarray]
-    df_star: Union[float, jnp.ndarray]
-    g_star: Union[list, jnp.ndarray]
+    phi_star: Union[float, jnp.ndarray]
+    dphi_star: Union[float, jnp.ndarray]
+    g_star: Union[float, jnp.ndarray]
     nfev: Union[int, jnp.ndarray]
     ngev: Union[int, jnp.ndarray]
 
@@ -161,16 +161,16 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         failed=False,
         j=0,
         a_lo=a_lo,
-        f_lo=f_lo,
-        df_lo=df_lo,
+        phi_lo=f_lo,
+        dphi_lo=df_lo,
         a_hi=a_hi,
-        f_hi=f_hi,
-        df_hi=df_hi,
+        phi_hi=f_hi,
+        dphi_hi=df_hi,
         a_rec=(a_lo + a_hi) / 2.,
-        f_rec=(f_lo + f_hi) / 2.,
+        phi_rec=(f_lo + f_hi) / 2.,
         a_star=0.,
-        f_star=f_lo,
-        df_star=df_lo,
+        phi_star=f_lo,
+        dphi_star=df_lo,
         g_star=g0,
         nfev=0,
         ngev=0,
@@ -190,7 +190,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         qchk = delta2 * dalpha
 
         state = state._replace(
-            failed=state.failed or jnp.isclose(b, a, rtol=1e-5)
+            failed=state.failed or jnp.isclose(b, a, rtol=1e-8)
             )
         if pars.ls_verbosity >= 4:
             print('\t\t\titer {}, alpha between {:.2e} and {:.2e}'.format(
@@ -199,13 +199,13 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
         # Cubicmin is sometimes nan,
         # though in this case the bounds check will fail.
         a_j = state.a_rec
-        a_j_cu = _cubicmin(state.a_lo, state.f_lo, state.df_lo,
-                           state.a_hi, state.f_hi, state.a_rec, state.f_rec)
+        a_j_cu = _cubicmin(state.a_lo, state.phi_lo, state.dphi_lo,
+                           state.a_hi, state.phi_hi, state.a_rec, state.phi_rec)
         if (state.j > 0) & (a_j_cu > a + cchk) & (a_j_cu < b - cchk):
             a_j = a_j_cu
         else:
-            a_j_quad = _quadmin(state.a_lo, state.f_lo, state.df_lo,
-                                state.a_hi, state.f_hi)
+            a_j_quad = _quadmin(state.a_lo, state.phi_lo, state.dphi_lo,
+                                state.a_hi, state.phi_hi)
             if (a_j_quad > a + qchk) & (a_j_quad < b - qchk):
                 a_j = a_j_quad
             else:
@@ -218,58 +218,58 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
             )
         if pars.ls_verbosity >= 4:
             print('\t\t\t  - a_j={:.2e} -> f_j {:.2e}, f_lo {:.2e}, Wolfe1: {}'.format(
-                a_j, f_j, state.f_lo, wolfe_one(a_j, f_j)))
+                a_j, f_j, state.phi_lo, wolfe_one(a_j, f_j)))
             print('\t\t\t  - df_j {:.2e}, df_lo {:.2e}, Wolfe2: {}'.format(
-                df_j, state.df_lo, wolfe_two(df_j)))
+                df_j, state.dphi_lo, wolfe_two(df_j)))
 
-        if wolfe_one(a_j, f_j) | (f_j >= state.f_lo):
+        if wolfe_one(a_j, f_j) | (f_j >= state.phi_lo):
             state = state._replace(
                 a_hi=a_j,
-                f_hi=f_j,
-                df_hi=df_j,
+                phi_hi=f_j,
+                dphi_hi=df_j,
                 a_rec=state.a_hi,
-                f_rec=state.f_hi
+                phi_rec=state.phi_hi
                 )
-            # if pars.ls_verbosity >= 4:
-            #     print('\t\t\ta_hi = a_j')
+            if pars.ls_verbosity >= 5:
+                print('\t\t\ta_hi = a_j')
         elif wolfe_two(df_j):
             state = state._replace(
                 done=(True or state.done),
                 a_star=a_j,
-                f_star=f_j,
-                df_star=df_j,
+                phi_star=f_j,
+                dphi_star=df_j,
                 g_star=g_j
                 )
-            # if pars.ls_verbosity >= 4:
-            #     print('\t\t\ta_star = a_j')
+            if pars.ls_verbosity >= 5:
+                print('\t\t\ta_star = a_j')
         elif (df_j * (state.a_hi - state.a_lo) >= 0):
             state = state._replace(
                 a_hi=a_lo,
-                f_hi=f_lo,
-                df_hi=df_lo,
+                phi_hi=f_lo,
+                dphi_hi=df_lo,
                 a_rec=state.a_hi,
-                f_rec=state.f_hi
+                phi_rec=state.phi_hi
                 )
-            # if pars.ls_verbosity >= 4:
-            #     print('\t\t\ta_hi = a_lo')
+            if pars.ls_verbosity >= 5:
+                print('\t\t\ta_hi = a_lo')
         else:
             state = state._replace(
                 a_lo=a_j,
-                f_lo=f_j,
-                df_lo=df_j,
+                phi_lo=f_j,
+                dphi_lo=df_j,
                 a_rec=state.a_lo,
-                f_rec=state.f_lo
+                phi_rec=state.phi_lo
                 )
-            # if pars.ls_verbosity >= 4:
-            #     print('\t\t\ta_lo = a_j')
+            if pars.ls_verbosity >= 5:
+                print('\t\t\ta_lo = a_j')
 
         state = state._replace(j=state.j + 1)
 
     if state.failed:
         state = state._replace(
             a_star=state.a_lo,
-            f_star=state.f_lo,
-            df_star=state.df_lo,
+            phi_star=state.phi_lo,
+            dphi_star=state.dphi_lo,
             g_star=g_j,
             )
         if pars.ls_verbosity >= 3:
@@ -280,7 +280,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
     return state
 
 
-def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=None, ls_pars=None):
+def linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=None, ls_pars=None):
 
     if ls_pars is None:
         ls_pars = LineSearchParameter()
@@ -296,16 +296,15 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
         done=False,
         failed=False,
         i=1,
-        ai=0.,
-        fi=f0,
-        dfi=df0,
+        a_i1=0.,
+        phi_i1=f0,
+        dphi_i1=df0,
         nfev=0,
         ngev=0,
         a_star=0,
-        f_star=f0,
-        df_star=df0,
+        phi_star=f0,
+        dphi_star=df0,
         g_star=g0,
-        saddle_point=False
         )
 
     if ls_pars.ls_verbosity >= 1:
@@ -314,14 +313,19 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
     if (aold is not None) and (dfold is not None):
         alpha_0 = aold * dfold / df0
         initial_step_length = alpha_0
-        # initial_step_length = jnp.where(alpha_0 > ls_pars.ls_initial_step,
-        #                                 ls_pars.ls_initial_step,
-        #                                 alpha_0)
-    elif (fold is not None) and (~jnp.isinf(fold)):
-        alpha_0 = 2 * jnp.abs(f0 - fold) / jnp.abs(df0)
         initial_step_length = jnp.where(alpha_0 > ls_pars.ls_initial_step,
                                         ls_pars.ls_initial_step,
                                         alpha_0)
+    elif (fold is not None) and (~jnp.isinf(fold)):
+        candidate = 1.01 * 2 * jnp.abs((f0 - fold) / df0)
+        candidate = jnp.where(candidate < 1e-8, 1e-8, candidate)
+        initial_step_length = jnp.where(candidate > ls_pars.ls_initial_step,
+                                        ls_pars.ls_initial_step,
+                                        candidate)
+        if ls_pars.ls_verbosity >= 3:
+            print(
+                f'\tcandidate alpha: {candidate}, accepted: {initial_step_length}')
+
     else:
         initial_step_length = ls_pars.ls_initial_step
 
@@ -331,18 +335,9 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
         ai = jnp.where(
             state.i == 1,
             initial_step_length,
-            state.ai * ls_pars.ls_optimism
+            state.a_i1 * ls_pars.ls_optimism
             )
-        # if ai <= 0 then something went wrong. In practice any
-        # really small step length is a failure.
-        # Likely means the search pk is not good, perhaps we
-        # are at a saddle point.
-        saddle_point = ai < 1e-5
-        state = state._replace(
-            failed=saddle_point,
-            saddle_point=saddle_point
-            )
-
+        
         fi, gri, dfi = cost_and_grad(ai)
         state = state._replace(
             nfev=state.nfev + 1,
@@ -353,18 +348,18 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
             print("\titer: {}\n\t\talpha: {:.2e} "
                   "f(alpha): {:.5e}".format(state.i, ai, fi))
 
-        if wolfe_one(ai, fi) or ((fi > state.fi) and state.i > 1):
+        if wolfe_one(ai, fi) or ((fi > state.phi_i1) and state.i > 1):
             if ls_pars.ls_verbosity >= 2:
                 print('\t\tEntering zoom1...')
             zoom1 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
-                          state.ai, state.fi, state.dfi, ai, fi, dfi,
-                          gri, ls_pars)
+                              state.a_i1, state.phi_i1, state.dphi_i1, ai, fi, dfi,
+                              gri, ls_pars)
             state = state._replace(
                 done=(zoom1.done or state.done),
                 failed=(zoom1.failed or state.failed),
                 a_star=zoom1.a_star,
-                f_star=zoom1.f_star,
-                df_star=zoom1.df_star,
+                phi_star=zoom1.phi_star,
+                dphi_star=zoom1.dphi_star,
                 g_star=zoom1.g_star,
                 nfev=state.nfev + zoom1.nfev,
                 ngev=state.ngev + zoom1.ngev
@@ -375,22 +370,22 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
             state = state._replace(
                 done=(True or state.done),
                 a_star=ai,
-                f_star=fi,
-                df_star=dfi,
+                phi_star=fi,
+                dphi_star=dfi,
                 g_star=gri
                 )
         elif dfi >= 0:
             if ls_pars.ls_verbosity >= 2:
                 print('\t\tEntering zoom2')
             zoom2 = _zoom(cost_and_grad, wolfe_one, wolfe_two,
-                          ai, fi, dfi, state.ai, state.fi, state.dfi,
-                          gri, ls_pars)
+                              ai, fi, dfi, state.a_i1, state.phi_i1, state.dphi_i1,
+                              gri, ls_pars)
             state = state._replace(
                 done=(zoom2.done or state.done),
                 failed=(zoom2.failed or state.failed),
                 a_star=zoom2.a_star,
-                f_star=zoom2.f_star,
-                df_star=zoom2.df_star,
+                phi_star=zoom2.phi_star,
+                dphi_star=zoom2.dphi_star,
                 g_star=zoom2.g_star,
                 nfev=state.nfev + zoom2.nfev,
                 ngev=state.ngev + zoom2.ngev
@@ -398,35 +393,36 @@ def wolfe_linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fo
 
         state = state._replace(
             i=state.i + 1,
-            ai=ai,
-            fi=fi,
-            dfi=dfi)
+            a_i1=ai,
+            phi_i1=fi,
+            dphi_i1=dfi)
 
     status = jnp.where(
-        state.failed & (~state.saddle_point),
+        state.failed,
         jnp.array(2),  # zoom failed
         jnp.where(
-            state.failed & state.saddle_point,
-            jnp.array(3),  # saddle point reached,
-            jnp.where(
-                state.i > ls_pars.ls_maxiter,
-                jnp.array(1),  # maxiter reached
-                jnp.array(0),  # passed (should be)
-                ),
+            state.i > ls_pars.ls_maxiter,
+            jnp.array(1),  # maxiter reached
+            jnp.array(0),  # passed (should be)
             ),
         )
-    if ls_pars.ls_verbosity >= 1:
-        print('\tLinesearch {} with status {}'.format(
-            'failed' if state.failed else 'done', status))
     result = _LineSearchResult(
-        failed=(state.failed | (~state.done)),
+        failed=state.failed,
         nit=state.i - 1,  # because iterations started at 1
         nfev=state.nfev,
         ngev=state.ngev,
         k=state.i,
-        a_k=state.ai if status==1 else state.a_star,
-        f_k=state.f_star,
+        a_k=state.a_i1 if status==1 else state.a_star,
+        f_k=state.phi_star,
         g_k=state.g_star,
         status=status,
         )
+    if ls_pars.ls_verbosity >= 1:
+        print('\tLinesearch {}, alpha star = {}'.format(
+            'failed' if state.failed else 'done', result.a_k))
+
     return result
+
+
+
+

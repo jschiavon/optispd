@@ -22,10 +22,16 @@ SOFTWARE.
 """
 
 import time
+
 import jax.numpy as jnp
-from jax.ops import index_update, index
-from typing import NamedTuple, Union
-from .linesearch import wolfe_linesearch, LineSearchParameter
+import jax
+from jax import lax
+
+from typing import NamedTuple, Union, Any
+from .linesearch import linesearch, LineSearchParameter
+
+
+Array = Any
 
 
 class OptimizerParams(NamedTuple):
@@ -37,12 +43,18 @@ class OptimizerParams(NamedTuple):
             maximum run time
         - maxiter (int, default 100)
             maximum number of iterations
-        - mingradnorm  (float, default 1e-8)
-            minimum gradient norm
-        - minstepsize  (float, default 1e-16)
-            minimum length of the stepsize
         - maxcostevals (int, default 5000)
             maximum number of cost evaluations
+        - maxgradevals (int, default 5000)
+            maximum number of gradient evaluations
+        - gtol  (float, default 1e-8)
+            minimum gradient norm `|g_k|_norm < gtol`
+        - ftol  (float, default 1e-8)
+            minimum function tolerance `(f_k - f_{k+1}) < ftol`
+        - minstepsize  (float, default 1e-16)
+            minimum length of the stepsize
+        - memory (int, default 4)
+            length of history to keep
         - verbosity (int, default 0)
             Level of information logged by the solver while it operates,
             0 is silent, 1 basic info on status, 2 info per iteration,
@@ -53,9 +65,11 @@ class OptimizerParams(NamedTuple):
 
     maxtime: Union[float, jnp.ndarray] = 100
     maxiter: Union[int, jnp.ndarray] = 500
-    mingradnorm: Union[float, jnp.ndarray] = 1e-6
-    minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
+    maxgradevals: Union[int, jnp.ndarray] = 5000
+    gtol: Union[float, jnp.ndarray] = 1e-4
+    ftol: Union[float, jnp.ndarray] = 1e-9
+    minstepsize: Union[float, jnp.ndarray] = 1e-16
     memory: Union[int, jnp.ndarray] = 4
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
@@ -93,7 +107,6 @@ class OptimizerResult(NamedTuple):
         - time:
             time used by the optimization
     """
-
     name: str
     success: Union[bool, jnp.ndarray]
     status: Union[int, jnp.ndarray]
@@ -174,6 +187,21 @@ class OptimizerLog(NamedTuple):
     time: jnp.ndarray = jnp.array([])
 
 
+class OptimizerState(NamedTuple):
+    k: Union[int, Array]
+    nfev: Union[int, Array]
+    ngev: Union[int, Array]
+    x_k: Array
+    f_k: Array
+    g_k: Array
+    grnorm: Array
+    s_history: Array
+    y_history: Array
+    rho_history: Array
+    gamma: Array
+    stepsize: Array
+
+
 class RL_BFGS():
     """L-BFGS optimizer."""
 
@@ -191,15 +219,20 @@ class RL_BFGS():
                 maximum run time
             - maxiter (int, default 100)
                 maximum number of iterations
-            - mingradnorm  (float, default 1e-8)
-                minimum gradient norm
-            - minstepsize  (float, default 1e-16)
-                minimum length of the stepsize
             - maxcostevals (int, default 5000)
                 maximum number of cost evaluations
+            - gtol  (float, default 1e-8)
+                minimum gradient norm `|g_k|_norm < gtol`
+            - ftol  (float, default 1e-8)
+                minimum function tolerance `(f_k - f_{k+1}) < ftol`
+            - minstepsize  (float, default 1e-16)
+                minimum length of the stepsize
+            - memory (int, default 4)
+                length of history to keep
             - verbosity (int, default 0)
                 Level of information logged by the solver while it operates,
-                0 is silent, 1 basic info on status, 2 info per iteration
+                0 is silent, 1 basic info on status, 2 info per iteration,
+                3 info per linesearch iteration
             - logverbosity (bool, default False)
                 Wether to produce a log of the optimization
         Optional linesearch parameters:
@@ -230,44 +263,83 @@ class RL_BFGS():
             )
         if pars.get('ls_verbosity', None) is None:
             self._ls_pars = self._ls_pars._replace(
-                ls_verbosity=max(0, self._parms.verbosity - 3)
+                ls_verbosity=max(0, self._parms.verbosity - 4)
                 )
 
     def __str__(self):
         """Representat the optimizer as a string."""
         return self.__name__
 
-    def _check_stopping_criterion(self, time0, iters=-1, grnorm=float('inf'), stepsize=float('inf'), costevals=-1):
-        status = - 1
-        if grnorm <= self._parms.mingradnorm:
-            status = 0
-        elif stepsize <= self._parms.minstepsize:
-            status = 1
-        elif iters >= self._parms.maxiter:
-            status = 2
-        elif time.time() >= time0 + self._parms.maxtime:
-            status = 3
-        elif costevals >= self._parms.maxcostevals:
-            status = 4
+    def _check_stopping_criterion(self, newf=float('inf'), newgrnorm=float('inf'), time0=-float('inf')):
+        status = -1
+        status = jnp.where(
+            jnp.abs(self.state.f_k - newf) < jnp.abs(newf) * self._parms.ftol,
+            6, status)
+        status = jnp.where(
+            self.state.stepsize < self._parms.minstepsize,
+            5, status)
+        status = jnp.where(
+            self.state.nfev >= self._parms.maxcostevals,
+            4, status)
+        status = jnp.where(
+            self.state.ngev >= self._parms.maxgradevals,
+            3, status)
+        status = jnp.where(
+            time.time() > time0 + self._parms.maxtime,
+            2, status)
+        status = jnp.where(
+            self.state.k >= self._parms.maxiter,
+            1, status)
+        status = jnp.where(newgrnorm < self._parms.gtol, 0, status)
+        
         return status
     
-    def _compute_descent_direction(self, l, x, gr, gamma):
-        q = gr
-        m = self._parms.memory
-        H0 = gamma * jnp.identity(gr.shape[0])
-        alpha = jnp.zeros(shape=(l,))
-        if self._parms.verbosity >= 3:
-            print('\tm = {}; l = {}'.format(m, l))
-        for i in jnp.arange(m - l + 1, 0, -1):
-            alpha = index_update(alpha, i-1, self.rhok[i-1] * self.man.inner(x, self.sk[i-1], q))
-            q = q - alpha[i-1] * self.yk[i-1]
-        r = jnp.matmul(H0, q)
-        for i in jnp.arange(0, l):
-            beta = self.rhok[i] * self.man.inner(x, self.yk[i], r)
-            r = r + (alpha[i] - beta) * self.sk[i]
-        return -r
+    def _compute_descent_direction(self):
+        q = self.state.g_k
+        his_size = len(self.state.rho_history)
+        curr_size = jnp.where(self.state.k < his_size, self.state.k, his_size)
+        a_his = jnp.zeros_like(self.state.rho_history)
 
-    def solve(self, objective, gradient, x=None, key=None):
+        if self._parms.verbosity >= 3:
+            print('\tm = {}; l = {}'.format(his_size, curr_size))
+            
+        if self._parms.verbosity >= 4:
+            print('\t\trho history: ', self.state.rho_history)
+            print('\t\ts history: ', self.state.s_history)
+            print('\t\ty history: ', self.state.y_history)
+            print('\t\tstarting q = {}'.format(q))
+            
+        for j in range(curr_size):
+            i = his_size - 1 - j
+            a_i = self.state.rho_history[i] * self.man.inner(
+                self.state.x_k,
+                self.state.s_history[i],
+                q)
+            a_his = a_his.at[i].set(a_i)
+            q = q - a_i * self.state.y_history[i]
+            if self._parms.verbosity >= 4:
+                print(f'\t\ti: {i}, a_i: {a_i}, q: {q}')
+                print(f'\t\tsk_i: {self.state.s_history[i]}, yk_i: {self.state.y_history[i]}')
+            
+        q = self.state.gamma * q
+        if self._parms.verbosity >= 4:
+            print('\t\tgamma= {}; after H_0 q = {}'.format(self.state.gamma, q))
+
+        for j in range(curr_size):
+            i = his_size - curr_size + j
+            b_i = self.state.rho_history[i] * self.man.inner(
+                self.state.x_k,
+                self.state.y_history[i],
+                q
+            )
+            q = q + (a_his[i] - b_i) * self.state.s_history[i]
+            if self._parms.verbosity >= 4:
+                print(f'\t\ti: {i}, a_i: {a_i}, q: {q}')
+        if self._parms.verbosity >= 3:
+            print(f'\t\tfinal descent direction: {-q}')
+        return - q
+
+    def solve(self, objective, gradient=None, x0=None, key=None, natural_gradient=True):
         """
         Perform optimization using gradient descent with linesearch.
 
@@ -280,184 +352,217 @@ class RL_BFGS():
                 The cost function to be optimized
             - gradient : callable
                 The gradient of the cost function
-            - x : array (None)
+            - x0 : array (None)
                 Optional parameter. Starting point on the manifold. If none
                 then a starting point will be randomly generated.
             - key: array (None)
                 Optional parameter, required if x is not provided to randomly
                 initiate the algorithm
+            - natural_gradient: bool (True)
+                Optional parameter. If true, assumes that the natural gradient is 
+                required and computes egrad2rgrad after the gradient
         Returns:
             - OptimizerResult object
         """
-        msg = ("status meaning: 0=converged, 1=stepsize too small, "
-               "2=max iters reached, 3=max time reached, "
-               "4=max cost evaluations, "
-               "-1=undefined"
-               )
+        msg = """Status: 
+    0=converged, 1=max iters reached, 
+    2=max time reached, 3=max grad evaluations, 
+    4=max cost evaluations, 5=stepsize too small,
+    6=function value not changing
+    -1=undefined"""
+        
         if self._parms.verbosity >= 1:
             print('Starting {}'.format(self.__name__))
 
-        self._costev = 0
-        self._gradev = 0
+        t_start = time.time()
 
-        def cost(x):
-            self._costev += 1
-            return objective(x)
+        if natural_gradient:
+            def value_and_grad(x):
+                c, g = jax.value_and_grad(objective)(x)
+                return c, self.man.proj(x, self.man.egrad2rgrad(x, g))
+        else:
+            def value_and_grad(x):
+                c, g = jax.value_and_grad(objective)(x)
+                return c, self.man.proj(x, g)
 
-        def grad(x):
-            self._gradev += 1
-            return self.man.egrad2rgrad(x, gradient(x))
-
-        def ls(c_a_g, x, d, f0, df0, g0):
-            return wolfe_linesearch(c_a_g, x, d, f0, df0, g0, self._ls_pars)
-
-        if x is None:
+        if x0 is None:
             try:
-                x = self.man.rand(key)
+                x0 = self.man.rand(key)
             except TypeError:
                 raise ValueError("Either provide an initial point for"
                                  " the algorithm or a valid random key"
                                  " to perform random initialization")
 
-        k = 0
-        l = 0
-        gamma = 1.
-        stepsize = 1.
-
-        memorized_shape = (self._parms.memory,) + x.shape
+        f0, g0 = value_and_grad(x0)
+        grnorm = self.man.norm(x0, g0)
+        sk = [jax.tree_map(lambda inpt: jnp.zeros_like(inpt), g0)
+              for _ in range(self._parms.memory)]
+        yk = [jax.tree_map(lambda inpt: jnp.zeros_like(inpt), g0)
+              for _ in range(self._parms.memory)]
+        rhok = jnp.zeros(shape=(self._parms.memory))
+        fold = jnp.inf
         
-        self.sk = jnp.zeros(shape=(memorized_shape))
-        self.yk = jnp.zeros(shape=(memorized_shape))
-        self.rhok = jnp.zeros(shape=(self._parms.memory))
-
-        f0 = cost(x)
-        gr = grad(x)
-        grnorm = self.man.norm(x, gr)
-        d = - gr
-        df0 = self.man.inner(x, d, gr)
-            
+        self.state = OptimizerState(
+            k=0,
+            nfev=1,
+            ngev=1,
+            x_k=x0,
+            f_k=f0,
+            g_k=g0,
+            grnorm=grnorm,
+            s_history=sk,
+            y_history=yk,
+            rho_history=rhok,
+            gamma=1.,
+            stepsize=1.,
+        )
         
-        t_start = time.time()
+        t_it = time.time() - t_start
+
         if self._parms.logverbosity:
             logs = OptimizerLog(
                 name="log of {}".format(self.__name__),
-                fun=jnp.array([f0]),
-                x=[x],
-                grnorm=jnp.array([grnorm]),
-                fev=jnp.array([self._costev], dtype=int),
-                gev=jnp.array([self._gradev], dtype=int),
-                it=jnp.array([k], dtype=int),
-                stepsize=jnp.array([1.]),
+                fun=jnp.array([self.state.f_k]),
+                x=[self.state.x_k],
+                grnorm=jnp.array([self.state.grnorm]),
+                fev=jnp.array([self.state.nfev], dtype=int),
+                gev=jnp.array([self.state.ngev], dtype=int),
+                it=jnp.array([self.state.k], dtype=int),
+                stepsize=jnp.array([self.state.stepsize]),
                 time=jnp.array([time.time() - t_start])
-                )
+            )
         
         while True:
+            t_st = time.time()
+
+            if self._parms.verbosity == 1:
+                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(self.state.k, self.state.f_k, t_it), end='\r', flush=True)
             
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(k, f0))
-                print('\tgrad norm: {:.2f}'.format(grnorm))
-                print('\tdirectional derivative: {:.2f}'.format(df0))
+                print('iter: {}\n\tfun value: {:.2f}'.format(
+                    self.state.k, self.state.f_k))
+                print('\tgrad norm: {:.2f}'.format(self.state.grnorm))
+            
+            d_k = self._compute_descent_direction()
+            df_k = self.man.inner(self.state.x_k, d_k, self.state.g_k)
 
+            if self._parms.verbosity >= 2:
+                print('\tdirectional derivative: {:.2f}'.format(df_k))
+
+            def restricted_value_and_grad(t):
+                xnew = self.man.retraction(self.state.x_k, t * d_k)
+                fn, gn = value_and_grad(xnew)
+                dn = self.man.inner(xnew, d_k, gn)
+                return fn, gn, dn
+
+            ls_results = linesearch(
+                cost_and_grad=restricted_value_and_grad,
+                x=self.state.x_k,
+                d=d_k,
+                f0=self.state.f_k,
+                df0=df_k,
+                g0=self.state.g_k,
+                fold=fold,
+                ls_pars=self._ls_pars
+            )
+            
+            a_k = ls_results.a_k
+            newx = self.man.retraction(self.state.x_k, a_k * d_k)
+            newf = ls_results.f_k
+            newgr = ls_results.g_k
+            newgrnorm = self.man.norm(newx, newgr)
+            fold = self.state.f_k
+            
+            def vtransp(v): 
+                return self.man.vector_transport(self.state.x_k, a_k * d_k, v)
+
+            sk = vtransp(self.man.log(self.state.x_k, newx))
+            yk = newgr - vtransp(self.state.g_k)
+            # if self._parms.verbosity >= 4:
+            #     print(sk)
+            #     print(yk)
+            #     print(newgr, self.state.g_k)
+            #     print(a_k * d_k)
+            #     print(self.state.x_k)
+            #     print(newx)
+
+            rho_k_inv = self.man.inner(newx, yk, sk)
+            rho_k = jnp.reciprocal(rho_k_inv)
+            gamma = rho_k_inv / (self.man.norm(newx, yk) ** 2)
+            
             status = self._check_stopping_criterion(
-                t_start,
-                k,
-                grnorm,
-                stepsize,
-                self._costev
+                newf=newf, newgrnorm=newgrnorm, time0=t_start)
+            l = jnp.where(self.state.k + 1 < self._parms.memory,
+                          self.state.k + 1, self._parms.memory)
+
+            self.state = self.state._replace(
+                k=self.state.k + 1,
+                nfev=self.state.nfev + ls_results.nfev,
+                ngev=self.state.ngev + ls_results.ngev,
+                x_k=newx,
+                f_k=newf,
+                g_k=newgr,
+                grnorm=newgrnorm,
+                s_history=_update_history(self.state.s_history, sk, vtransp, l),
+                y_history=_update_history(self.state.y_history, yk, vtransp, l),
+                rho_history=_update_history_scalar(self.state.rho_history, rho_k),
+                gamma=gamma,
+                stepsize=jnp.abs(a_k * df_k),
+            )
+            
+            t_it = time.time() - t_st
+
+            if self._parms.logverbosity:
+                logs = logs._replace(
+                    fun=jnp.append(logs.fun, self.state.f_k),
+                    x=logs.x + [self.state.x_k],
+                    grnorm=jnp.append(logs.grnorm, self.state.grnorm),
+                    fev=jnp.append(logs.fev, self.state.nfev),
+                    gev=jnp.append(logs.gev, self.state.ngev),
+                    it=jnp.append(logs.it, self.state.k),
+                    stepsize=jnp.append(logs.stepsize, self.state.stepsize),
+                    time=jnp.append(logs.time, t_it)
                 )
+            
             if status >= 0:
                 break
 
-            def cost_and_grad(t):
-                xnew = self.man.retraction(x, t * d)
-                fn = cost(xnew)
-                gn = grad(xnew)
-                dn = self.man.inner(xnew, - gn, gn)
-                # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
-                return fn, gn, dn
-
-            ls_results = ls(cost_and_grad, x, d, f0, df0, gr)
-
-            alpha = ls_results.a_k
-            stepsize = jnp.abs(alpha * df0)
-            newx = self.man.retraction(x, alpha * d)
-            newf = ls_results.f_k
-            newgr = ls_results.g_k
-            newgrnorm = self.man.norm(x, gr)
-
-            sk = self.man.vector_transport(x, alpha * d, alpha * d)
-            yk = newgr - self.man.vector_transport(x, alpha * d, gr)
-
-            a = self.man.inner(newx, yk, sk)
-            b = self.man.norm(newx, sk) ** 2
-            if ((a / b) >= (grnorm * 1e-4)):
-                c = self.man.norm(newx, yk) ** 2
-                rhok = 1 / a
-                gamma = a / c
-
-                if l == self._parms.memory:
-                    self.sk = self.sk[1:]
-                    self.yk = self.yk[1:]
-                    self.rhok = self.rhok[1:]
-                else:
-                    l += 1
-                
-                self.sk = index_update(self.sk, index[l, :, :], sk)
-                self.yk = index_update(self.yk, index[l, :, :], yk)
-                self.rhok = index_update(self.rhok, l, rhok)
-                
-                for i in range(l):
-                    self.sk = index_update(self.sk, index[i, :, :], self.man.vector_transport(x, alpha*d, self.sk[i]))
-                    self.yk = index_update(self.yk, index[i, :, :], self.man.vector_transport(x, alpha*d, self.yk[i]))
-
-            if self._parms.verbosity >= 2:
-                print('\talpha: {}'.format(alpha))
-                print('\tgamma: {}'.format(gamma))
-                print('\ta / b: {}'.format(a / b))
-            
-            x = newx
-            f0 = newf
-            gr = newgr
-            grnorm = newgrnorm
-            k += 1
-            
-            if l > 0:
-                d = self._compute_descent_direction(l, x, gr, gamma)
-            else:
-                d = - gr
-            df0 = self.man.inner(x, d, gr)
-            
-            if self._parms.logverbosity:
-                logs = logs._replace(
-                    fun=jnp.append(logs.fun, f0),
-                    x=logs.x + [x],
-                    grnorm=jnp.append(logs.grnorm, grnorm),
-                    fev=jnp.append(logs.fev, self._costev),
-                    gev=jnp.append(logs.gev, self._gradev),
-                    it=jnp.append(logs.it, k),
-                    stepsize=jnp.append(logs.stepsize, stepsize),
-                    time=jnp.append(logs.time, time.time() - t_start)
-                    )
-
         result = OptimizerResult(
-                name=self.__name__,
-                success=True if status == 0 else False,
-                status=status,
-                message=msg,
-                x=x,
-                fun=f0,
-                gr=gr,
-                grnorm=grnorm,
-                nfev=self._costev,
-                ngev=self._gradev,
-                nit=k,
-                stepsize=stepsize,
-                time=(time.time() - t_start)
-                )
+            name=self.__name__,
+            success=True if status == 0 else False,
+            status=status,
+            message=msg,
+            x=self.state.x_k,
+            fun=self.state.f_k,
+            gr=self.state.g_k,
+            grnorm=self.state.grnorm,
+            nfev=self.state.nfev,
+            ngev=self.state.ngev,
+            nit=self.state.k,
+            stepsize=self.state.stepsize,
+            time=(time.time() - t_start)
+        )
         
+        if self._parms.verbosity == 1:
+            print()
         if self._parms.verbosity >= 1:
             result.pprint()
         
         if self._parms.logverbosity:
             return result, logs
         return result
+
+
+def _update_history(history, new, fun, l):
+    history.pop(0)
+    history.append(new)
+    m = len(history)
+    for j in range(1, m):
+        i = m - 1 - j
+        if j < l:
+            history[i] = fun(history[i])
+    
+    return history
+
+def _update_history_scalar(history, new):
+    return jnp.roll(history, -1, axis=0).at[-1].set(new)

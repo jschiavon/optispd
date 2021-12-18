@@ -21,7 +21,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-available_algorithms = ['rgd', 'rcg', 'rlbfgs', 'rsgdm']
+available_algorithms = ['rgd', 'rcg', 'rlbfgs']
 _msg = "The selected method is not available yet. Please use one of {}".format(" ".join(available_algorithms))
 
 def minimizer(man, method='rgd', **pars):
@@ -35,12 +35,8 @@ def minimizer(man, method='rgd', **pars):
     elif method == 'rlbfgs':
         from .l_bfgs import RL_BFGS as _rlbfgs
         return _rlbfgs(man, **pars)
-    elif method == 'rsgdm':
-        raise NotImplementedError("rsgdm is not implemented yet")
-        from .gradient_descent_momentum import RSGDM as _rsgdm
-        return _rsgdm(man, **pars)
     else:
         raise NotImplementedError(_msg)
 
 
-from .linesearch import wolfe_linesearch, LineSearchParameter
+from .linesearch import linesearch, LineSearchParameter

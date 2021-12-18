@@ -23,9 +23,15 @@ SOFTWARE.
 
 import time
 import jax.numpy as jnp
-from jax import value_and_grad
-from typing import NamedTuple, Union
-from .linesearch import wolfe_linesearch, LineSearchParameter
+import jax
+from jax import lax
+
+from typing import NamedTuple, Union, Any, Optional
+
+from .linesearch import linesearch, LineSearchParameter
+
+
+Array = Any
 
 
 class OptimizerParams(NamedTuple):
@@ -37,12 +43,16 @@ class OptimizerParams(NamedTuple):
             maximum run time
         - maxiter (int, default 100)
             maximum number of iterations
-        - tol  (float, default 1e-6)
-            minimum gradient norm and relative function variation
-        - minstepsize  (float, default 1e-16)
-            minimum length of the stepsize
         - maxcostevals (int, default 5000)
             maximum number of cost evaluations
+        - maxgradevals (int, default 5000)
+            maximum number of gradient evaluations
+        - gtol  (float, default 1e-8)
+            minimum gradient norm `|g_k|_norm < gtol`
+        - ftol  (float, default 1e-8)
+            minimum function tolerance `(f_k - f_{k+1}) < ftol`
+        - minstepsize  (float, default 1e-16)
+            minimum length of the stepsize
         - betamethod (str, default hestenesstiefel)
             Method for beta computation
         - verbosity (int, default 0)
@@ -55,9 +65,11 @@ class OptimizerParams(NamedTuple):
 
     maxtime: Union[float, jnp.ndarray] = 100
     maxiter: Union[int, jnp.ndarray] = 500
-    tol: Union[float, jnp.ndarray] = 1e-6
-    minstepsize: Union[float, jnp.ndarray] = 1e-16
     maxcostevals: Union[int, jnp.ndarray] = 5000
+    maxgradevals: Union[int, jnp.ndarray] = 5000
+    gtol: Union[float, jnp.ndarray] = 1e-4
+    ftol: Union[float, jnp.ndarray] = 1e-9
+    minstepsize: Union[float, jnp.ndarray] = 1e-16
     betamethod: str = "polakribiere"
     verbosity: Union[int, jnp.ndarray] = 0
     logverbosity: Union[bool, jnp.ndarray] = False
@@ -182,8 +194,347 @@ class OptimizerLog(NamedTuple):
     time: jnp.ndarray = jnp.array([])
 
 
+class OptimizerState(NamedTuple):
+    k: Union[int, Array]
+    nfev: Union[int, Array]
+    ngev: Union[int, Array]
+    x_k: Array
+    f_k: Array
+    g_k: Array
+    grnorm: Array
+    stepsize: Array
+    old_x: Optional[Array] = None
+    old_g: Optional[Array] = None
+    
+
 def _precon(x, g):
     return g
+
+
+
+class RCG():
+    """Conjugate gradient optimizer."""
+
+    BetaAvailable = [
+        'hagerzhang',
+        'hybridhsdy',
+        'fletcherreeves',
+        'polakribiere',
+        'hestenesstiefel'
+        ]
+    Algo = 'Riemannian Conjugate Gradient'
+    ShortName = 'R-CG'
+
+    def __init__(self, manifold, **pars):
+        """
+        Conjugate Gradient optimizer.
+
+        The available methods for the computations of Beta are available
+        through the attribute `BetaAvailable`.
+
+        Mandatory arguments:
+            - manifold
+                A manifold object that defines the operations on the manifold
+        Optional parameters:
+            - maxtime (float, default 100)
+                maximum run time
+            - maxiter (int, default 100)
+                maximum number of iterations
+            - maxcostevals (int, default 5000)
+                maximum number of cost evaluations
+            - gtol  (float, default 1e-8)
+                minimum gradient norm `|g_k|_norm < gtol`
+            - ftol  (float, default 1e-8)
+                minimum function tolerance `(f_k - f_{k+1}) < ftol`
+            - minstepsize  (float, default 1e-16)
+                minimum length of the stepsize
+            - betamethod (str, default hestenesstiefel)
+                Method for beta computation
+            - verbosity (int, default 0)
+                Level of information logged by the solver while it operates,
+                0 is silent, 1 basic info on status, 2 info per iteration,
+                3 info per linesearch iteration
+            - logverbosity (bool, default False)
+                Wether to produce a log of the optimization
+        Optional linesearch parameters:
+            - ls_maxiter (int, default 10)
+                maximum number of iterations
+            - ls_minstepsize  (float, default 1e-16)
+                minimum length of the stepsize
+            - ls_optimism (float, default 1.2)
+                optimism of the new step
+            - ls_initial_step (float, default 1)
+                initial stepsize before linesearch
+            - ls_suff_decr (float, default 1e-4)
+                sufficient decrease parameter
+            - ls_contraction (float, default 0.5)
+                contraction factor (must be 0 < c < 1)
+            - ls_verbosity (int, default 0)
+                Level of information to be displayed:
+                < 3 is silent, 3+ basic info
+        """
+        self.man = manifold
+        self.__name__ = ("{} on {}".format(self.Algo, str(self.man).lower()))
+
+        self._parms = OptimizerParams(
+            **{k: pars[k] for k in pars if k in OptimizerParams._fields}
+            )
+        self._ls_pars = LineSearchParameter(
+            **{k: pars[k] for k in pars if k in LineSearchParameter._fields}
+            )
+        if pars.get('ls_verbosity', None) is None:
+            self._ls_pars = self._ls_pars._replace(
+                ls_verbosity=max(0, self._parms.verbosity - 3)
+                )
+
+        if self._parms.betamethod.lower() not in self.BetaAvailable:
+            types = ", ".join([t for t in self.BetaAvailable])
+            raise ValueError(
+                "Unknown beta method {}.\nShould be one of [{}]".format(
+                    self._parms.betamethod.lower(), types
+                    )
+                )
+        self.compute_beta = _betachoice(
+            self._parms.betamethod.lower(),
+            self.man
+        )
+
+    def __str__(self):
+        """Representat the optimizer as a string."""
+        return self.__name__
+
+    def _check_stopping_criterion(self, newf=float('inf'), newgrnorm=float('inf'), time0=-float('inf')):
+        status = -1
+        status = jnp.where(
+            jnp.abs(self.state.f_k - newf) < jnp.abs(newf) * self._parms.ftol,
+            6, status)
+        status = jnp.where(
+            self.state.stepsize < self._parms.minstepsize,
+            5, status)
+        status = jnp.where(
+            self.state.nfev >= self._parms.maxcostevals,
+            4, status)
+        status = jnp.where(
+            self.state.ngev >= self._parms.maxgradevals,
+            3, status)
+        status = jnp.where(
+            time.time() > time0 + self._parms.maxtime,
+            2, status)
+        status = jnp.where(
+            self.state.k >= self._parms.maxiter,
+            1, status)
+        status = jnp.where(newgrnorm < self._parms.gtol, 0, status)
+
+        return status
+
+    def _compute_descent_direction(self):
+        if self.state.old_x is None:
+            return - self.state.g_k
+        
+        s_k = self.man.vector_transport(
+            self.state.old_x, 
+            self.man.log(self.state.x_k, self.state.old_x),
+            self.man.log(self.state.x_k, self.state.old_x)
+        )
+        y_k = self.state.g_k - self.man.vector_transport(
+            self.state.old_x,
+            self.man.log(self.state.x_k, self.state.old_x),
+            self.state.old_g
+        )
+        ip_diff = self.man.inner(self.state.x_k, self.state.g_k, y_k)
+        grinn = self.state.grnorm ** 2
+        beta = max(0, ip_diff / grinn)
+        beta = ((self.man.norm(self.state.x_k, self.state.g_k) ** 2) / 
+            (self.man.norm(self.state.old_x, self.state.old_g) ** 2))
+        if jnp.isnan(beta):
+            beta = 0.
+
+        return - self.state.g_k + beta * s_k
+    
+    def solve(self, objective, gradient=None, x0=None, key=None, natural_gradient=True):
+        """
+        Perform optimization using conjugate gradient method.
+
+        Arguments:
+            - objective : callable
+                The cost function to be optimized
+            - gradient : callable
+                The gradient of the cost function
+            - x0 : array (None)
+                Optional parameter. Starting point on the manifold. If none
+                then a starting point will be randomly generated.
+            - key: array (None)
+                Optional parameter, required if x is not provided to randomly
+                initiate the algorithm
+            - natural_gradient: bool (True)
+                Optional parameter. If true, assumes that the natural gradient is 
+                required and computes egrad2rgrad after the gradient
+        Returns:
+            - OptimizerResult object
+        """
+        msg = """Status: 
+    0=converged, 1=max iters reached, 
+    2=max time reached, 3=max grad evaluations, 
+    4=max cost evaluations, 5=stepsize too small,
+    6=function value not changing
+    -1=undefined"""
+
+
+        if self._parms.verbosity >= 1:
+            print('Starting {}'.format(self.__name__))
+
+        t_start = time.time()
+
+        
+        if natural_gradient:
+            def value_and_grad(x):
+                c, g = jax.value_and_grad(objective)(x)
+                return c, self.man.proj(x, self.man.egrad2rgrad(x, g))
+        else:
+            def value_and_grad(x):
+                c, g = jax.value_and_grad(objective)(x)
+                return c, self.man.proj(x, g)
+
+        if x0 is None:
+            try:
+                x0 = self.man.rand(key)
+            except TypeError:
+                raise ValueError("Either provide an initial point for"
+                                 " the algorithm or a valid random key"
+                                 " to perform random initialization")
+
+        f0, g0 = value_and_grad(x0)
+        grnorm = self.man.norm(x0, g0)
+        fold = jnp.inf
+        
+        self.state = OptimizerState(
+            k=0,
+            nfev=1,
+            ngev=1,
+            x_k=x0,
+            f_k=f0,
+            g_k=g0,
+            grnorm=grnorm,
+            stepsize=1.,
+        )
+
+        t_it = time.time() - t_start
+
+        if self._parms.logverbosity:
+            logs = OptimizerLog(
+                name="log of {}".format(self.__name__),
+                fun=jnp.array([self.state.f_k]),
+                x=[self.state.x_k],
+                grnorm=jnp.array([self.state.grnorm]),
+                fev=jnp.array([self.state.nfev], dtype=int),
+                gev=jnp.array([self.state.ngev], dtype=int),
+                it=jnp.array([self.state.k], dtype=int),
+                stepsize=jnp.array([self.state.stepsize]),
+                time=jnp.array([time.time() - t_start])
+            )
+
+        while True:
+            t_st = time.time()
+            
+            if self._parms.verbosity == 1:
+                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(
+                    self.state.k, self.state.f_k, t_it), end='\r', flush=True)
+
+            if self._parms.verbosity >= 2:
+                print('iter: {}\n\tfun value: {:.2f}'.format(
+                    self.state.k, self.state.f_k))
+                print('\tgrad norm: {:.2f}'.format(self.state.grnorm))
+
+            d_k = self._compute_descent_direction()
+            df_k = self.man.inner(self.state.x_k, d_k, self.state.g_k)
+
+            if (df_k > 0) or (jnp.abs(df_k) > 1e3 * (self.state.grnorm ** 2)):
+                d_k = - self.state.g_k
+                df_k = - self.state.grnorm ** 2
+            
+            if self._parms.verbosity >= 2:
+                print('\tdirectional derivative: {:.2f}'.format(df_k))
+
+            def restricted_value_and_grad(t):
+                xnew = self.man.retraction(self.state.x_k, t * d_k)
+                fn, gn = value_and_grad(xnew)
+                dn = self.man.inner(xnew, d_k, gn)
+                return fn, gn, dn
+
+            ls_results = linesearch(
+                cost_and_grad=restricted_value_and_grad,
+                x=self.state.x_k,
+                d=d_k,
+                f0=self.state.f_k,
+                df0=df_k,
+                g0=self.state.g_k,
+                fold=fold,
+                ls_pars=self._ls_pars
+            )
+            
+            a_k = ls_results.a_k
+            newx = self.man.retraction(self.state.x_k, a_k * d_k)
+            newf = ls_results.f_k
+            newgr = ls_results.g_k
+            newgrnorm = self.man.norm(newx, newgr)
+            fold = self.state.f_k
+
+            status = self._check_stopping_criterion(
+                newf=newf, newgrnorm=newgrnorm, time0=t_start)
+
+            self.state = self.state._replace(
+                k=self.state.k + 1,
+                nfev=self.state.nfev + ls_results.nfev,
+                ngev=self.state.ngev + ls_results.ngev,
+                old_x=self.state.x_k,
+                old_g=self.state.g_k,
+                x_k=newx,
+                f_k=newf,
+                g_k=newgr,
+                grnorm=newgrnorm,
+                stepsize=jnp.abs(a_k * df_k),
+            )
+
+            t_it = time.time() - t_st
+
+            if self._parms.logverbosity:
+                logs = logs._replace(
+                    fun=jnp.append(logs.fun, self.state.f_k),
+                    x=logs.x + [self.state.x_k],
+                    grnorm=jnp.append(logs.grnorm, self.state.grnorm),
+                    fev=jnp.append(logs.fev, self.state.nfev),
+                    gev=jnp.append(logs.gev, self.state.ngev),
+                    it=jnp.append(logs.it, self.state.k),
+                    stepsize=jnp.append(logs.stepsize, self.state.stepsize),
+                    time=jnp.append(logs.time, t_it)
+                )
+
+            if status >= 0:
+                break
+
+        result = OptimizerResult(name=self.__name__,
+                                 success=True if status == 0 else False,
+                                 status=status,
+                                 message=msg,
+                                 x=self.state.x_k,
+                                 fun=self.state.f_k,
+                                 gr=self.state.g_k,
+                                 grnorm=self.state.grnorm,
+                                 nfev=self.state.nfev,
+                                 ngev=self.state.ngev,
+                                 nit=self.state.k,
+                                 stepsize=self.state.stepsize,
+                                 time=(time.time() - t_start)
+                                 )
+
+        if self._parms.verbosity == 1:
+            print()
+        if self._parms.verbosity >= 1:
+            result.pprint()
+
+        if self._parms.logverbosity:
+            return result, logs
+        return result
 
 
 def _betachoice(method, manifold):
@@ -235,299 +586,3 @@ def _betachoice(method, manifold):
     else:
         raise NotImplementedError("The selected method does not exists.")
     return compute_beta
-
-
-class RCG():
-    """Conjugate gradient optimizer."""
-
-    BetaAvailable = [
-        'hagerzhang',
-        'hybridhsdy',
-        'fletcherreeves',
-        'polakribiere',
-        'hestenesstiefel'
-        ]
-    Algo = 'Riemannian Conjugate Gradient'
-    ShortName = 'R-CG'
-
-    def __init__(self, manifold, **pars):
-        """
-        Conjugate Gradient optimizer.
-
-        The available methods for the computations of Beta are available
-        through the attribute `BetaAvailable`.
-
-        Mandatory arguments:
-            - manifold
-                A manifold object that defines the operations on the manifold
-        Optional parameters:
-            - maxtime (float, default 100)
-                maximum run time
-            - maxiter (int, default 100)
-                maximum number of iterations
-            - mingradnorm  (float, default 1e-8)
-                minimum gradient norm
-            - minstepsize  (float, default 1e-16)
-                minimum length of the stepsize
-            - maxcostevals (int, default 5000)
-                maximum number of cost evaluations
-            - betamethod (str, default HestenesStiefel)
-                Method for beta computation, check `BetaAvailable` attribute
-                to see the implemented ones
-            - verbosity (int, default 0)
-                Level of information logged by the solver while it operates,
-                0 is silent, 1 basic info on status, 2 info per iteration
-            - logverbosity (bool, default False)
-                Wether to produce a log of the optimization
-        Optional linesearch parameters:
-            - ls_maxiter (int, default 10)
-                maximum number of iterations
-            - ls_minstepsize  (float, default 1e-16)
-                minimum length of the stepsize
-            - ls_optimism (float, default 1.2)
-                optimism of the new step
-            - ls_initial_step (float, default 1)
-                initial stepsize before linesearch
-            - ls_suff_decr (float, default 1e-4)
-                sufficient decrease parameter
-            - ls_contraction (float, default 0.5)
-                contraction factor (must be 0 < c < 1)
-            - ls_verbosity (int, default 0)
-                Level of information to be displayed:
-                < 3 is silent, 3+ basic info
-        """
-        self.man = manifold
-        self.__name__ = ("{} on {}".format(self.Algo, str(self.man).lower()))
-
-        self._parms = OptimizerParams(
-            **{k: pars[k] for k in pars if k in OptimizerParams._fields}
-            )
-        self._ls_pars = LineSearchParameter(
-            **{k: pars[k] for k in pars if k in LineSearchParameter._fields}
-            )
-        if pars.get('ls_verbosity', None) is None:
-            self._ls_pars = self._ls_pars._replace(
-                ls_verbosity=max(0, self._parms.verbosity - 3)
-                )
-
-        if self._parms.betamethod.lower() not in self.BetaAvailable:
-            types = ", ".join([t for t in self.BetaAvailable])
-            raise ValueError(
-                "Unknown beta method {}.\nShould be one of [{}]".format(
-                    self._parms.betamethod.lower(), types
-                    )
-                )
-
-    def __str__(self):
-        """Representat the optimizer as a string."""
-        return self.__name__
-
-    def _check_stopping_criterion(self, time0, gradnorm=float('inf'),
-                                  stepsize=float('inf'), funcvar=float('inf')):
-        status = - 1
-        if gradnorm <= self._parms.tol:
-            status = 0
-        elif stepsize <= self._parms.minstepsize:
-            status = 1
-        elif self._iters >= self._parms.maxiter:
-            status = 2
-        elif time.time() >= time0 + self._parms.maxtime:
-            status = 3
-        elif self._costev >= self._parms.maxcostevals:
-            status = 4
-        elif funcvar <= self._parms.tol:
-            status = 5
-        elif jnp.isnan(gradnorm):
-            raise ValueError("A wild nan appeared, iteration {}".format(self._iters))
-        return status
-
-    def solve(self, objective, gradient=None, x=None, key=None, natural_gradient=False):
-        """
-        Perform optimization using conjugate gradient method.
-
-        Arguments:
-            - objective : callable
-                The cost function to be optimized
-            - gradient : callable
-                The gradient of the cost function
-            - x : array (None)
-                Optional parameter. Starting point on the manifold. If none
-                then a starting point will be randomly generated.
-            - key: array (None)
-                Optional parameter, required if x is not provided to randomly
-                initiate the algorithm
-        Returns:
-            - OptimizerResult object
-        """
-        msg = ("status meaning: 0=converged, 1=stepsize too small, "
-               "2=max iters reached, 3=max time reached, "
-               "4=max cost evaluations, 5=function value not changing"
-               "-1=undefined"
-               )
-
-        if self._parms.verbosity >= 1:
-            print('Starting {}'.format(self.__name__))
-
-        self._costev = 0
-        self._gradev = 0
-        t_start = time.time()
-
-        self.compute_beta = _betachoice(
-            self._parms.betamethod.lower(),
-            self.man
-            )
-
-        if ~natural_gradient:
-            def cost_and_grad(x):
-                self._costev += 1
-                self._gradev += 1
-                c, g = value_and_grad(objective)(x)
-                return c, self.man.proj(x, self.man.egrad2rgrad(x, g))
-        else:
-            def cost_and_grad(x):
-                self._costev += 1
-                self._gradev += 1
-                c, g = value_and_grad(objective)(x)
-                return c, self.man.proj(x, g)
-
-        if x is None:
-            try:
-                x = self.man.rand(key)
-            except TypeError:
-                raise ValueError("Either provide an initial point for"
-                                 " the algorithm or a valid random key"
-                                 " to perform random initialization")
-
-        self._iters = 0
-        stepsize = 1.
-        f0, gr = cost_and_grad(x)
-        fold = jnp.inf
-        aold = None
-        dfold = None
-        grnorm = self.man.norm(x, gr)
-
-        d = - gr
-
-        t_it = time.time() - t_start
-
-        if self._parms.logverbosity:
-            logs = OptimizerLog(
-                name="log of {}".format(self.__name__),
-                fun=jnp.array([f0]),
-                x=[x],
-                grnorm=jnp.array([grnorm]),
-                fev=jnp.array([self._costev], dtype=int),
-                gev=jnp.array([self._gradev], dtype=int),
-                it=jnp.array([self._iters], dtype=int),
-                stepsize=jnp.array([1.]),
-                time=jnp.array([t_it])
-                )
-
-        while True:
-            t_st = time.time()
-            
-            df0 = self.man.inner(x, gr, d)
-            if df0 >= 0:
-                if self._parms.verbosity >= 2:
-                    print("Conjugate gradient info: got an ascent direction "
-                          "(df0 = {:.2f}), reset to the (preconditioned) "
-                          "steepest descent direction.".format(df0))
-                d = - gr
-                df0 = - grnorm
-
-            if self._parms.verbosity == 1:
-                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(self._iters, f0, t_it), end='\r', flush=True)
-
-            if self._parms.verbosity >= 2:
-                print('iteration: {}\n\tfun value: {:.2f}'.format(self._iters, f0))
-                print('\tgrad norm: {:.2f}'.format(grnorm))
-                print('\tdirectional derivative: {:.2f}'.format(df0))
-
-            try:
-                status = self._check_stopping_criterion(
-                    t_start,
-                    grnorm,
-                    stepsize,
-                    jnp.abs((f0 - fold) / f0),
-                    )
-            except ValueError as e:
-                status = -1
-                print(e)
-                break
-
-            if (status >= 0):
-                break
-
-            def c_and_g(t):
-                xnew = self.man.retraction(x, t * d)
-                fn, gn = cost_and_grad(xnew)
-                dn = self.man.inner(xnew, - gn, gn)
-                # dn = -jnp.sqrt(jnp.abs(dn)) if dn < 0 else jnp.sqrt(dn)
-                return fn, gn, dn
-
-            ls_results = wolfe_linesearch(c_and_g, x, d, f0, df0, gr, aold=aold, dfold=dfold, ls_pars=self._ls_pars)
-            # ls_results = wolfe_linesearch(cost_and_grad, x, d, f0, df0, gr, ls_pars=self._ls_pars)
-            alpha = ls_results.a_k
-            stepsize = jnp.abs(alpha * df0)
-            newx = self.man.retraction(x, alpha * d)
-            newf = ls_results.f_k
-            newgr = ls_results.g_k
-            newgrnorm = self.man.norm(newx, newgr)
-            newd = self.man.parallel_transport(x, newx, alpha * d)
-
-            beta = self.compute_beta(x, newx, gr, newgr, alpha * d, newd)
-            if jnp.isnan(beta):
-                beta = 0.
-
-            d = - newgr + beta * newd
-
-            if self._parms.verbosity >= 2:
-                print('\talpha: {}'.format(alpha))
-                print('\tbeta: {}'.format(beta))
-
-            x = newx
-            fold = f0
-            f0 = newf
-            gr = newgr
-            grnorm = newgrnorm
-            aold = alpha
-            dfold = df0
-
-            self._iters += 1
-            t_it = time.time() - t_st
-
-            if self._parms.logverbosity:
-                logs = logs._replace(
-                    fun=jnp.append(logs.fun, f0),
-                    x=logs.x + [x],
-                    grnorm=jnp.append(logs.grnorm, grnorm),
-                    fev=jnp.append(logs.fev, self._costev),
-                    gev=jnp.append(logs.gev, self._gradev),
-                    it=jnp.append(logs.it, self._iters),
-                    stepsize=jnp.append(logs.stepsize, stepsize),
-                    time=jnp.append(logs.time, t_it)
-                    )
-
-        result = OptimizerResult(
-            name=self.__name__,
-            success=(status == 0),
-            status=status,
-            message=msg,
-            x=x,
-            fun=f0,
-            gr=gr,
-            grnorm=grnorm,
-            nfev=self._costev,
-            ngev=self._gradev,
-            nit=self._iters,
-            stepsize=stepsize,
-            time=(time.time() - t_start)
-            )
-
-        if self._parms.verbosity >= 2:
-            result.pprint()
-        
-        if self._parms.logverbosity:
-            return result, logs
-        return result
-
