@@ -92,7 +92,7 @@ class OptimizerResult(NamedTuple):
             final solution.
         - fun:
             final function value.
-        - gr:
+        - jac:
             final gradient array.
         - grnorm:
             norm of the gradient.
@@ -113,7 +113,7 @@ class OptimizerResult(NamedTuple):
     message: str
     x: jnp.ndarray
     fun: jnp.ndarray
-    gr: jnp.ndarray
+    jac: jnp.ndarray
     grnorm: jnp.ndarray
     nfev: Union[int, jnp.ndarray]
     ngev: Union[int, jnp.ndarray]
@@ -132,7 +132,7 @@ class OptimizerResult(NamedTuple):
             "[{}]\n"
             " -Iterations {} (cost evaluation: {}, gradient evaluation: {}, "
             "time/it: {})\n"
-            " \t Function value {:.3f}, gradient norm {}, stepsize {},\n"
+            " \t Function value {:.4e}, gradient norm {:.3e}, stepsize {},\n"
             " \t value of X:\n{}"
             ).format(
                 self.name,
@@ -145,8 +145,8 @@ class OptimizerResult(NamedTuple):
     def pprint(self):
         """Print a concise summary of the result."""
         message = "Optimization {}completed (status {}).".format("" if self.success else "not ", self.status)
-        details = "{} iterations in {:.3f} s".format(self.nit, self.time)
-        print(message + "\t" + details)
+        details = "{} iters in {:.3f} s; function value: {:.4e}; gradient norm: {:.4e}".format(self.nit, self.time, self.fun, self.grnorm)
+        print(message + "\n" + details)
 
 
 class OptimizerLog(NamedTuple):
@@ -265,15 +265,22 @@ class RL_BFGS():
             self._ls_pars = self._ls_pars._replace(
                 ls_verbosity=max(0, self._parms.verbosity - 4)
                 )
+        if self._parms.verbosity >= 3:
+            jnp.set_printoptions(precision=3, suppress=True,
+                                 sign=' ', floatmode='maxprec_equal')
+
 
     def __str__(self):
         """Representat the optimizer as a string."""
         return self.__name__
 
+    
     def _check_stopping_criterion(self, newf=float('inf'), newgrnorm=float('inf'), time0=-float('inf')):
         status = -1
         status = jnp.where(
-            jnp.abs(self.state.f_k - newf) < jnp.abs(newf) * self._parms.ftol,
+            jnp.isclose(self.state.f_k, newf, 
+                rtol=self._parms.ftol, 
+                atol=self._parms.ftol),
             6, status)
         status = jnp.where(
             self.state.stepsize < self._parms.minstepsize,
@@ -288,11 +295,12 @@ class RL_BFGS():
             time.time() > time0 + self._parms.maxtime,
             2, status)
         status = jnp.where(
-            self.state.k >= self._parms.maxiter,
+            self.state.k >= self._parms.maxiter - 1,
             1, status)
         status = jnp.where(newgrnorm < self._parms.gtol, 0, status)
         
         return status
+    
     
     def _compute_descent_direction(self):
         q = self.state.g_k
@@ -337,9 +345,11 @@ class RL_BFGS():
                 print(f'\t\ti: {i}, a_i: {a_i}, q: {q}')
         if self._parms.verbosity >= 3:
             print(f'\t\tfinal descent direction: {-q}')
+        
         return - q
 
-    def solve(self, objective, gradient=None, x0=None, key=None, natural_gradient=True):
+    
+    def solve(self, objective, x0, gradient=None, key=None, natural_gradient=True):
         """
         Perform optimization using gradient descent with linesearch.
 
@@ -350,11 +360,12 @@ class RL_BFGS():
         Arguments:
             - objective : callable
                 The cost function to be optimized
-            - gradient : callable
-                The gradient of the cost function
-            - x0 : array (None)
-                Optional parameter. Starting point on the manifold. If none
+            - x0 : array
+                Starting point on the manifold. If none
                 then a starting point will be randomly generated.
+            - gradient : callable (None)
+                Optional parameter. The gradient of the cost function.
+                If not provided, jax autodiff will be used
             - key: array (None)
                 Optional parameter, required if x is not provided to randomly
                 initiate the algorithm
@@ -436,23 +447,38 @@ class RL_BFGS():
             t_st = time.time()
 
             if self._parms.verbosity == 1:
-                print('iteration: {}\tfun value: {:.2f}\t[{:.3f} s]'.format(self.state.k, self.state.f_k, t_it), end='\r', flush=True)
+                print('k: {}\t|\tfun: {:.4e}\t|\tgrad: {:.4e}\t[{:.3f} s]'.format(
+                    self.state.k, self.state.f_k, self.state.grnorm, t_it), 
+                    end='\r', flush=True)
             
             if self._parms.verbosity >= 2:
-                print('iter: {}\n\tfun value: {:.2f}'.format(
+                print('iter: {}\n\tfun value: {:.4e}'.format(
                     self.state.k, self.state.f_k))
-                print('\tgrad norm: {:.2f}'.format(self.state.grnorm))
+                print('\t|grad|: {:.2e}'.format(self.state.grnorm))
+            if self._parms.verbosity >= 3:
+                print('\tpoint: ', self.state.x_k)
             
             d_k = self._compute_descent_direction()
             df_k = self.man.inner(self.state.x_k, d_k, self.state.g_k)
 
             if self._parms.verbosity >= 2:
-                print('\tdirectional derivative: {:.2f}'.format(df_k))
+                print('\t<d, g>: {:.2e}'.format(df_k))
 
+            if df_k > 0:
+                if self._parms.verbosity >= 2:
+                    print("\t-> d is not a desccent direction, reset to - g")
+                d_k = - self.state.g_k
+                df_k = self.man.inner(self.state.x_k, d_k, self.state.g_k)
+            
             def restricted_value_and_grad(t):
                 xnew = self.man.retraction(self.state.x_k, t * d_k)
                 fn, gn = value_and_grad(xnew)
                 dn = self.man.inner(xnew, d_k, gn)
+                if self._parms.verbosity >= 100:
+                    print(f'\t\t\txnew: {xnew}')
+                    print(f'\t\t\tfnew: {fn}')
+                    print(f'\t\t\tgnew: {gn}')
+                    print(f'\t\t\tdnew: {dn}')
                 return fn, gn, dn
 
             ls_results = linesearch(
@@ -476,7 +502,7 @@ class RL_BFGS():
             def vtransp(v): 
                 return self.man.vector_transport(self.state.x_k, a_k * d_k, v)
 
-            sk = vtransp(self.man.log(self.state.x_k, newx))
+            sk = vtransp(a_k * d_k)
             yk = newgr - vtransp(self.state.g_k)
             # if self._parms.verbosity >= 4:
             #     print(sk)
@@ -488,7 +514,8 @@ class RL_BFGS():
 
             rho_k_inv = self.man.inner(newx, yk, sk)
             rho_k = jnp.reciprocal(rho_k_inv)
-            gamma = rho_k_inv / (self.man.norm(newx, yk) ** 2)
+            gamma = jnp.abs(rho_k_inv) / (self.man.norm(newx, yk) ** 2)
+            #gamma = 1.
             
             status = self._check_stopping_criterion(
                 newf=newf, newgrnorm=newgrnorm, time0=t_start)
@@ -534,7 +561,7 @@ class RL_BFGS():
             message=msg,
             x=self.state.x_k,
             fun=self.state.f_k,
-            gr=self.state.g_k,
+            jac=self.state.g_k,
             grnorm=self.state.grnorm,
             nfev=self.state.nfev,
             ngev=self.state.ngev,

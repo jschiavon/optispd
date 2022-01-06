@@ -50,9 +50,9 @@ class LineSearchParameter(NamedTuple):
             < 3 is silent, 3+ basic info
     """
 
-    ls_maxiter: Union[int, jnp.ndarray] = 10
+    ls_maxiter: Union[int, jnp.ndarray] = 20
     ls_minstepsize: Union[float, jnp.ndarray] = 1e-16
-    ls_optimism: Union[float, jnp.ndarray] = 1.2
+    ls_optimism: Union[float, jnp.ndarray] = 2.
     ls_initial_step: Union[float, jnp.ndarray] = 1.
     ls_suff_decr: Union[float, jnp.ndarray] = 1e-4
     ls_curvature: Union[float, jnp.ndarray] = 0.9
@@ -222,7 +222,12 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
             print('\t\t\t  - df_j {:.2e}, df_lo {:.2e}, Wolfe2: {}'.format(
                 df_j, state.dphi_lo, wolfe_two(df_j)))
 
-        if wolfe_one(a_j, f_j) | (f_j >= state.phi_lo):
+        hi_to_j = wolfe_one(a_j, f_j) | (f_j >= state.phi_lo)
+        star_to_j = wolfe_two(df_j) & (~hi_to_j)
+        hi_to_lo = (df_j * (state.a_hi - state.a_lo) >= 0.) & (~hi_to_j) & (~star_to_j)
+        lo_to_j = (~hi_to_j) & (~star_to_j)
+        
+        if hi_to_j:
             state = state._replace(
                 a_hi=a_j,
                 phi_hi=f_j,
@@ -232,7 +237,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                 )
             if pars.ls_verbosity >= 5:
                 print('\t\t\ta_hi = a_j')
-        elif wolfe_two(df_j):
+        if star_to_j:
             state = state._replace(
                 done=(True or state.done),
                 a_star=a_j,
@@ -242,7 +247,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                 )
             if pars.ls_verbosity >= 5:
                 print('\t\t\ta_star = a_j')
-        elif (df_j * (state.a_hi - state.a_lo) >= 0):
+        if hi_to_lo:
             state = state._replace(
                 a_hi=a_lo,
                 phi_hi=f_lo,
@@ -252,7 +257,7 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
                 )
             if pars.ls_verbosity >= 5:
                 print('\t\t\ta_hi = a_lo')
-        else:
+        if lo_to_j:
             state = state._replace(
                 a_lo=a_j,
                 phi_lo=f_j,
@@ -273,10 +278,10 @@ def _zoom(cost_and_grad, wolfe_one, wolfe_two,
             g_star=g_j,
             )
         if pars.ls_verbosity >= 3:
-            print('\t\tZoom failed, a_star = {}'.format(state.a_star))
+            print('\t\tZoom failed, a_star = {:.3e}'.format(state.a_star))
     else:
         if pars.ls_verbosity >= 3:
-            print('\t\tZoom done, a_star = {}'.format(state.a_star))
+            print('\t\tZoom done, a_star = {:.3e}'.format(state.a_star))
     return state
 
 
@@ -319,13 +324,11 @@ def linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=Non
     elif (fold is not None) and (~jnp.isinf(fold)):
         candidate = 1.01 * 2 * jnp.abs((f0 - fold) / df0)
         candidate = jnp.where(candidate < 1e-8, 1e-8, candidate)
-        initial_step_length = jnp.where(candidate > ls_pars.ls_initial_step,
+        initial_step_length = jnp.where(candidate > 1.2 * ls_pars.ls_initial_step,
                                         ls_pars.ls_initial_step,
                                         candidate)
         if ls_pars.ls_verbosity >= 3:
-            print(
-                f'\tcandidate alpha: {candidate}, accepted: {initial_step_length}')
-
+            print(f'\tcandidate: {candidate:.2e}, accepted: {initial_step_length:.2e}')
     else:
         initial_step_length = ls_pars.ls_initial_step
 
@@ -342,6 +345,18 @@ def linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=Non
         state = state._replace(
             nfev=state.nfev + 1,
             ngev=state.ngev + 1
+            )
+        # if dfi > 0:
+        #     state._replace(
+        #         failed=True,
+        #     )
+        #     break
+        while jnp.isnan(fi):
+            ai = ai / 10.
+            fi, gri, dfi = cost_and_grad(ai)
+            state = state._replace(
+                nfev=state.nfev + 1,
+                ngev=state.ngev + 1
             )
 
         if ls_pars.ls_verbosity >= 2:
@@ -418,7 +433,7 @@ def linesearch(cost_and_grad, x, d, f0, df0, g0, aold=None, dfold=None, fold=Non
         status=status,
         )
     if ls_pars.ls_verbosity >= 1:
-        print('\tLinesearch {}, alpha star = {}'.format(
+        print('\tLinesearch {}, alpha star = {:.2e}'.format(
             'failed' if state.failed else 'done', result.a_k))
 
     return result
