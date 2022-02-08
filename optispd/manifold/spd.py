@@ -67,11 +67,9 @@ class SPD():
         self._p = p
         self._m = m
         if m == 1:
-            name = ("Manifold of ({0} x {0}) "
-                    "positive definite matrices").format(p)
+            name = "({0} x {0}) SPD ".format(p)
         else:
-            name = ("Product manifold of {1} ({0} x {0}) "
-                    "positive definite matrices").format(p, m)
+            name = "Product {1} ({0} x {0}) SPDs".format(p, m)
         self._dimension = m * jnp.int_(p * (p + 1) / 2)
         self._name = name
         self._approximated = approx
@@ -95,7 +93,7 @@ class SPD():
         is defined as `Trace(X^-1 * U * X^-1 * W)`.
         """
         inn = jnp.einsum(
-            '...ij,...ji',
+            '...ij,...ij',
             jnp.linalg.solve(X, U),
             jnp.linalg.solve(X, W))
         if self._m > 1:
@@ -218,15 +216,13 @@ class SPD():
         This transport parallely vector `U` in the tangent space at `X`
         to its corresponding vector along the direction given by vector `W`.
         """
-        iX = jnp.linalg.inv(X)
         gt2 = self.retraction(X, 0.5 * W)
+        ixgt2 = jnp.linalg.solve(X, gt2)
         return jnp.einsum(
-            '...ij,...jk,...kl,...lm,...mn',
-            gt2,
-            iX,
+            '...ji,...jk,...kl',
+            ixgt2,
             U,
-            iX,
-            gt2
+            ixgt2
         )
         # Xhalf = _sqrtm(X)
         # iXhalf = jnp.linalg.inv(Xhalf)
@@ -269,7 +265,4 @@ class SPD():
             return self.secondorder_vtransport(X, W, U)
         else:
             return self.vtransport(X, W, U)
-        # if self._p > 5:
-        #     return self.secondorder_vtransport(X, U, W)
-        # else:
-        #     return self.vtransport(X, U, W)
+        # return self.vtransport(X, U, W)

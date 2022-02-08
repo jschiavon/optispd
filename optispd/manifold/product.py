@@ -59,20 +59,20 @@ class Product():
         arr = jnp.zeros(self._len_man)
         for k, man in enumerate(self._man):
             arr = arr.at[k].set(man.norm(X[k], G[k]))
-        return jnp.sum(arr)
+        return jnp.sqrt(jnp.dot(arr, arr))
 
     def dist(self, X, Y):
         arr = jnp.zeros(self._len_man)
         for k, man in enumerate(self._man):
             arr = arr.at[k].set(man.dist(X[k], Y[k]))
-        return jnp.sqrt(jnp.sum(arr * arr))
+        return jnp.sqrt(jnp.dot(arr, arr))
 
     def proj(self, X, U):
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.proj(X[k], U[k]) for k, man in enumerate(self._man)])
 
     def egrad2rgrad(self, X, G):
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.egrad2rgrad(X[k], G[k]) for k, man in enumerate(self._man)])
 
     def value_and_grad(self, fun, X):
@@ -89,7 +89,7 @@ class Product():
             [man.retraction(X[k], U[k]) for k, man in enumerate(self._man)])
 
     def log(self, X, U):
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.log(X[k], U[k]) for k, man in enumerate(self._man)])
 
     def rand(self, key):
@@ -99,59 +99,63 @@ class Product():
 
     def randvec(self, key, X):
         key = jax.random.split(key, self._len_man)
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.rand(key[k], X[k]) for k, man in enumerate(self._man)])
 
     def parallel_transport(self, X, Y, U):
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.parallel_transport(X[k], Y[k], U[k])
                 for k, man in enumerate(self._man)])
 
     def vector_transport(self, X, W, U):
-        return _ProductTangentVector(
+        return _ProdTV(
             [man.vector_transport(X[k], U[k], W[k])
                 for k, man in enumerate(self._man)])
 
 
-class _ProductTangentVector(list):
+class _ProdTV(list):
     def __repr__(self):
-        return "_ProductTangentVector: " + super().__repr__()
+        return "_ProdTV: " + super().__repr__()
 
     def __add__(self, other):
         assert len(self) == len(other)
-        return _ProductTangentVector(
+        return _ProdTV(
             [v + other[k] for k, v in enumerate(self)])
 
     def __sub__(self, other):
         assert len(self) == len(other)
-        return _ProductTangentVector(
+        return _ProdTV(
             [v - other[k] for k, v in enumerate(self)])
 
     def __mul__(self, other):
-        return _ProductTangentVector([other * val for val in self])
+        return _ProdTV([other * val for val in self])
 
     __rmul__ = __mul__
 
     def __div__(self, other):
-        return _ProductTangentVector([val / other for val in self])
+        return _ProdTV([val / other for val in self])
 
     def __neg__(self):
-        return _ProductTangentVector([-val for val in self])
+        return _ProdTV([-val for val in self])
 
 
-def _flatten_ProductTangentVector(container) -> Tuple[Iterable[int], str]:
-  """Returns an iterable over _ProductTangentVector contents, and aux data."""
+def _flatten_ProdTV(container) -> Tuple[Iterable[int], str]:
+  """Returns an iterable over _ProdTV contents, and aux data."""
   flat_contents = list(container)
 
   aux_data = None
   return flat_contents, aux_data
 
 
-def _unflatten_ProductTangentVector(
-        aux_data: str, flat_contents: Iterable[int]) -> _ProductTangentVector:
-  """Converts aux data and the flat contents into a _ProductTangentVector."""
-  return _ProductTangentVector(flat_contents)
+def _unflatten_ProdTV(
+        aux_data: str, 
+        flat_contents: Iterable[int]) -> _ProdTV:
+  """Converts aux data and the flat contents into a _ProdTV."""
+  return _ProdTV(flat_contents)
 
 
 jax.tree_util.register_pytree_node(
-    _ProductTangentVector, _flatten_ProductTangentVector, _unflatten_ProductTangentVector)
+    _ProdTV, _flatten_ProdTV, _unflatten_ProdTV)
+
+
+
